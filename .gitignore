@@ -1,0 +1,6 @@
+venv/
+backend/venv/
+backend/curriculum.db
+backend/CS_Curr.csv
+__pycache__/
+*.pyc
