@@ -2,8 +2,10 @@ from flask import Flask, jsonify
 import sqlite3
 import pandas as pd
 import networkx as nx
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
 def init_db():
     conn = sqlite3.connect('curriculum.db')
@@ -171,7 +173,57 @@ compute_scores(G)
 
 @app.route('/curriculum', methods=['GET'])
 def get_curriculum():
-    return jsonify({"message": "hello from flask"})
+    conn = sqlite3.connect('curriculum.db')
+    cursor = conn.cursor()
+
+    # Fetch all courses with their scores
+    courses_rows = cursor.execute('''
+        SELECT c.course_id, c.prefix, c.number, c.term,
+               s.blocking, s.delay, s.failure, s.frequency, s.total
+        FROM courses c
+        LEFT JOIN scores s ON c.id = s.course_id
+    ''').fetchall()
+
+    # Fetch all prerequisites, resolving both sides from db ids to CSV course_ids
+    prereq_rows = cursor.execute('''
+        SELECT parent.course_id, child.course_id, p.type
+        FROM prerequisites p
+        JOIN courses parent ON p.course_id = parent.id
+        JOIN courses child ON p.prereq_id = child.id
+    ''').fetchall()
+
+    conn.close()
+
+    # Build prereq lookup: course_id -> list of {prereq_id, type}
+    prereq_map = {}
+    for (course_id, prereq_id, rel_type) in prereq_rows:
+        if course_id not in prereq_map:
+            prereq_map[course_id] = []
+        prereq_map[course_id].append({'id': prereq_id, 'type': rel_type})
+
+    # Build course list
+    courses = []
+    for row in courses_rows:
+        course_id, prefix, number, term, blocking, delay, failure, frequency, total = row
+        courses.append({
+            'id': course_id,
+            'prefix': prefix,
+            'number': number,
+            'term': term,
+            'blocking': blocking,
+            'delay': delay,
+            'failure': failure,
+            'frequency': frequency,
+            'total': total,
+            'prerequisites': prereq_map.get(course_id, [])
+        })
+
+    curriculum_total = sum((c['blocking'] or 0) + (c['delay'] or 0) for c in courses)
+
+    return jsonify({
+        'curriculum_total': curriculum_total,
+        'courses': courses
+    })
 
 @app.route('/upload', methods=['POST'])
 def upload_csv():
