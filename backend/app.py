@@ -176,37 +176,37 @@ def get_curriculum():
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
 
-    # Fetch all courses with their scores
+    # Use c.id (the database's own unique autoincrement id) instead of
+    # c.course_id (the raw CSV id, which can be null or duplicated for
+    # "pathway" placeholder courses like capstone/electives).
     courses_rows = cursor.execute('''
-        SELECT c.course_id, c.prefix, c.number, c.term,
+        SELECT c.id, c.course_id, c.prefix, c.number, c.term,
                s.blocking, s.delay, s.failure, s.frequency, s.total
         FROM courses c
         LEFT JOIN scores s ON c.id = s.course_id
     ''').fetchall()
 
-    # Fetch all prerequisites, resolving both sides from db ids to CSV course_ids
+    # prerequisites already stores db ids directly (course_id/prereq_id in
+    # this table are db ids, not CSV ids) so no join back through the
+    # courses table is needed here at all.
     prereq_rows = cursor.execute('''
-        SELECT parent.course_id, child.course_id, p.type
-        FROM prerequisites p
-        JOIN courses parent ON p.course_id = parent.id
-        JOIN courses child ON p.prereq_id = child.id
+        SELECT course_id, prereq_id, type
+        FROM prerequisites
     ''').fetchall()
 
     conn.close()
 
-    # Build prereq lookup: course_id -> list of {prereq_id, type}
+    # Build prereq lookup: db id -> list of {id, type}
     prereq_map = {}
-    for (course_id, prereq_id, rel_type) in prereq_rows:
-        if course_id not in prereq_map:
-            prereq_map[course_id] = []
-        prereq_map[course_id].append({'id': prereq_id, 'type': rel_type})
+    for (course_db_id, prereq_db_id, rel_type) in prereq_rows:
+        prereq_map.setdefault(course_db_id, []).append({'id': prereq_db_id, 'type': rel_type})
 
-    # Build course list
     courses = []
     for row in courses_rows:
-        course_id, prefix, number, term, blocking, delay, failure, frequency, total = row
+        db_id, csv_course_id, prefix, number, term, blocking, delay, failure, frequency, total = row
         courses.append({
-            'id': course_id,
+            'id': db_id,                # unique, safe to use as a graph key
+            'course_id': csv_course_id, # original CSV id, kept for reference/display only
             'prefix': prefix,
             'number': number,
             'term': term,
@@ -215,7 +215,7 @@ def get_curriculum():
             'failure': failure,
             'frequency': frequency,
             'total': total,
-            'prerequisites': prereq_map.get(course_id, [])
+            'prerequisites': prereq_map.get(db_id, [])
         })
 
     curriculum_total = sum((c['blocking'] or 0) + (c['delay'] or 0) for c in courses)
