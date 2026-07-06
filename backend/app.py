@@ -1,4 +1,6 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
+import tempfile
+import os
 import sqlite3
 import pandas as pd
 import networkx as nx
@@ -102,14 +104,14 @@ def import_csv(filepath):
         # '0' and 'nan' both mean none.
         if course_id is not None:
             prereqs = str(row['Prerequisites']).strip()
-            if prereqs not in ('0', 'nan'):
+            if prereqs not in ('0', 'nan', '0.0'):
                 for p in prereqs.split(';'):
-                    prereq_rows.append((course_id, int(p.strip()), 'prereq'))
+                    prereq_rows.append((course_id, int(float(p.strip())), 'prereq'))
 
             coreqs = str(row['Corequisites']).strip()
-            if coreqs not in ('0', 'nan'):
+            if coreqs not in ('0', 'nan', '0.0'):
                 for c in coreqs.split(';'):
-                    prereq_rows.append((course_id, int(c.strip()), 'coreq'))
+                    prereq_rows.append((course_id, int(float(c.strip())), 'coreq'))
 
     # Second pass: insert prerequisites using db ids so each course row is a distinct graph node
     for (course_csv_id, prereq_csv_id, rel_type) in prereq_rows:
@@ -132,8 +134,10 @@ def build_graph():
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
     
+    # Only use hard prerequisites (not coreqs) for blocking/delay computation,
+    # consistent with CurricularAnalytics methodology
     edges = cursor.execute(
-        'SELECT prereq_id, course_id FROM prerequisites'
+        "SELECT prereq_id, course_id FROM prerequisites WHERE type = 'prereq'"
     ).fetchall()
 
     # Use autoincrement id (not course_id) so pathway rows with duplicate/null course_ids
@@ -227,7 +231,22 @@ def get_curriculum():
 
 @app.route('/upload', methods=['POST'])
 def upload_csv():
-    # TODO: receive uploaded CSV file here and call import_csv() with it
+    file = request.files.get('file')
+    if not file:
+        return jsonify({"status": "error", "message": "No file provided"}), 400
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
+        tmp_path = tmp.name
+        file.save(tmp_path)
+
+    try:
+        init_db()
+        import_csv(tmp_path)
+        G = build_graph()
+        compute_scores(G)
+    finally:
+        os.unlink(tmp_path)
+
     return jsonify({"status": "success"})
 
 if __name__ == '__main__':
