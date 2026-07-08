@@ -90,10 +90,22 @@ def import_csv(filepath):
         number_raw = str(row['Number']).strip()
         number = int(float(number_raw)) if number_raw not in ('nan', '', '0') else 0
 
+        term_raw = str(row['Term']).strip()
+        term = int(float(term_raw)) if term_raw not in ('nan', '') else None
+
+        credit_hours_raw = str(row['Credit Hours']).strip()
+        credit_hours = int(float(credit_hours_raw)) if credit_hours_raw not in ('nan', '') else None
+
+        failure_rate_raw = str(row['Failure Rate']).strip().replace('%', '')
+        failure_rate = float(failure_rate_raw) if failure_rate_raw not in ('nan', '') else None
+
+        frequency_raw = str(row['Frequency']).strip()
+        frequency = int(float(frequency_raw)) if frequency_raw not in ('nan', '') else None
+
         cursor.execute('''
-            INSERT INTO courses (course_id, prefix, number)
-            VALUES (?, ?, ?)
-        ''', (course_id, prefix, number))
+            INSERT INTO courses (course_id, prefix, number, term, credit_hours, failure_rate, frequency)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (course_id, prefix, number, term, credit_hours, failure_rate, frequency))
 
         db_id = cursor.lastrowid
         if course_id is not None:
@@ -134,10 +146,8 @@ def build_graph():
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
     
-    # Only use hard prerequisites (not coreqs) for blocking/delay computation,
-    # consistent with CurricularAnalytics methodology
     edges = cursor.execute(
-        "SELECT prereq_id, course_id FROM prerequisites WHERE type = 'prereq'"
+        'SELECT prereq_id, course_id FROM prerequisites'
     ).fetchall()
 
     # Use autoincrement id (not course_id) so pathway rows with duplicate/null course_ids
@@ -153,22 +163,33 @@ def build_graph():
 def compute_scores(G):
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
-    
-    for course_id in G.nodes():
-        # blocking: number of courses this course directly/indirectly blocks
-        blocking = len(nx.descendants(G, course_id))
-        
-        # delay: length of longest prereq chain this course appears on
-        relevant_nodes = nx.ancestors(G, course_id) | {course_id} | nx.descendants(G, course_id)
-        subgraph = G.subgraph(relevant_nodes)
-        longest_path = nx.dag_longest_path(subgraph)
-        delay = len(longest_path) if course_id in longest_path else 1
-        
+
+    topo = list(nx.topological_sort(G))
+
+    # Longest path TO each node (inclusive) via forward DP over topological order
+    longest_to = {node: 1 for node in G.nodes()}
+    for node in topo:
+        for pred in G.predecessors(node):
+            if longest_to[pred] + 1 > longest_to[node]:
+                longest_to[node] = longest_to[pred] + 1
+
+    # Longest path FROM each node (inclusive) via backward DP
+    longest_from = {node: 1 for node in G.nodes()}
+    for node in reversed(topo):
+        for succ in G.successors(node):
+            if longest_from[succ] + 1 > longest_from[node]:
+                longest_from[node] = longest_from[succ] + 1
+
+    for node in G.nodes():
+        blocking = len(nx.descendants(G, node))
+        # delay = longest path through this node; -1 avoids double-counting the node itself
+        delay = longest_to[node] + longest_from[node] - 1
+
         cursor.execute('''
             INSERT INTO scores (course_id, blocking, delay)
             VALUES (?, ?, ?)
-        ''', (course_id, blocking, delay))
-    
+        ''', (node, blocking, delay))
+
     conn.commit()
     conn.close()
 
@@ -185,7 +206,8 @@ def get_curriculum():
     # "pathway" placeholder courses like capstone/electives).
     courses_rows = cursor.execute('''
         SELECT c.id, c.course_id, c.prefix, c.number, c.term,
-               s.blocking, s.delay, s.failure, s.frequency, s.total
+               c.credit_hours, c.failure_rate, c.frequency,
+               s.blocking, s.delay, s.total
         FROM courses c
         LEFT JOIN scores s ON c.id = s.course_id
     ''').fetchall()
@@ -207,17 +229,18 @@ def get_curriculum():
 
     courses = []
     for row in courses_rows:
-        db_id, csv_course_id, prefix, number, term, blocking, delay, failure, frequency, total = row
+        db_id, csv_course_id, prefix, number, term, credit_hours, failure_rate, frequency, blocking, delay, total = row
         courses.append({
-            'id': db_id,                # unique, safe to use as a graph key
-            'course_id': csv_course_id, # original CSV id, kept for reference/display only
+            'id': db_id,
+            'course_id': csv_course_id,
             'prefix': prefix,
             'number': number,
             'term': term,
+            'credit_hours': credit_hours,
+            'failure_rate': failure_rate,
+            'frequency': frequency,
             'blocking': blocking,
             'delay': delay,
-            'failure': failure,
-            'frequency': frequency,
             'total': total,
             'prerequisites': prereq_map.get(db_id, [])
         })
