@@ -26,6 +26,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS courses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             course_id INTEGER,
+            name TEXT,
             prefix TEXT,
             number INTEGER,
             failure_rate REAL,
@@ -33,7 +34,6 @@ def init_db():
             term INTEGER,
             credit_hours INTEGER        
         );
-
 
         CREATE TABLE IF NOT EXISTS prerequisites (
             course_id INTEGER,
@@ -102,10 +102,13 @@ def import_csv(filepath):
         frequency_raw = str(row['Frequency']).strip()
         frequency = int(float(frequency_raw)) if frequency_raw not in ('nan', '') else None
 
+        course_name_raw = str(row['Course Name']).strip()
+        course_name = course_name_raw if course_name_raw not in ('nan', '') else None
+
         cursor.execute('''
-            INSERT INTO courses (course_id, prefix, number, term, credit_hours, failure_rate, frequency)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (course_id, prefix, number, term, credit_hours, failure_rate, frequency))
+            INSERT INTO courses (course_id, name, prefix, number, term, credit_hours, failure_rate, frequency)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (course_id, course_name, prefix, number, term, credit_hours, failure_rate, frequency))
 
         db_id = cursor.lastrowid
         if course_id is not None:
@@ -160,6 +163,7 @@ def build_graph():
     G.add_nodes_from(row[0] for row in db_ids)
     G.add_edges_from(edges)
     return G
+
 def compute_scores(G):
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
@@ -233,7 +237,7 @@ def get_curriculum():
     # c.course_id (the raw CSV id, which can be null or duplicated for
     # "pathway" placeholder courses like capstone/electives).
     courses_rows = cursor.execute('''
-        SELECT c.id, c.course_id, c.prefix, c.number, c.term,
+        SELECT c.id, c.course_id, c.name, c.prefix, c.number, c.term,
                c.credit_hours, s.blocking, s.delay, s.failure, s.frequency, s.total
         FROM courses c
         LEFT JOIN scores s ON c.id = s.course_id
@@ -256,10 +260,11 @@ def get_curriculum():
 
     courses = []
     for row in courses_rows:
-        db_id, csv_course_id, prefix, number, term, credit_hours, blocking, delay, failure, frequency, total = row
+        db_id, csv_course_id, name, prefix, number, term, credit_hours, blocking, delay, failure, frequency, total = row
         courses.append({
-            'id': db_id,
-            'course_id': csv_course_id,
+            'id': db_id,                # unique, safe to use as a graph key
+            'course_id': csv_course_id, # original CSV id, kept for reference/display only
+            'name': name,
             'prefix': prefix,
             'number': number,
             'term': term,

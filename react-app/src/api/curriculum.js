@@ -22,21 +22,20 @@ export async function fetchCurriculum(baseUrl = "http://localhost:5000") {
 export function transformCurriculumResponse(data) {
   const courses = data.courses.map((c) => ({
     id: c.id,
-    courseId: c.course_id, // original CSV id, kept for reference/display only
+    courseId: c.course_id,
     prefix: c.prefix,
     number: c.number,
-    name: `${c.prefix} ${c.number || ""}`.trim(), // backend doesn't return course names yet
+    term: c.term,
+    name: c.name || `${c.prefix} ${c.number || ""}`.trim(),
     scores: {
       blocking: c.blocking ?? 0,
       delay: c.delay ?? 0,
-      failure: c.failure,     // may be null — not computed by backend yet
-      frequency: c.frequency, // may be null — not computed by backend yet
-      total: c.total,         // may be null — not computed by backend yet
+      failure: c.failure ?? 0,
+      frequency: c.frequency ?? 0,
+      total: c.total ?? 0,
     },
   }));
 
-  // Each course lists its own prerequisites, so building edges is a
-  // straightforward flatten: prereq -> this course, for every course.
   const edges = data.courses.flatMap((c) =>
     (c.prerequisites || []).map((p) => ({
       source: p.id,

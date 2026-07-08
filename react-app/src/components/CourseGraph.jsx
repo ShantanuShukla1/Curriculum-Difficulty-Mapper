@@ -13,14 +13,14 @@ import { useMemo, useState } from "react";
 //      and, separately, the courses on its longest prereq chain (delay).
 //
 // Props:
-//   courses: [{ id, prefix, number, name, scores }]
+//   courses: [{ id, prefix, number, term, name, scores }]
 //   edges:   [{ source, target, type }]  type is "prereq" | "coreq"
 //   onSelectCourse: (course) => void
 // ---------------------------------------------------------------------
 
-const NODE_WIDTH = 130;
-const NODE_HEIGHT = 46;
-const COLUMN_GAP = 190;
+const NODE_WIDTH = 140;
+const NODE_HEIGHT = 50;
+const COLUMN_GAP = 200;
 const ROW_GAP = 70;
 const MARGIN = 40;
 
@@ -43,17 +43,16 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
     return { childrenOf, parentsOf };
   }, [courses, edges]);
 
-  // ---- Assign each course a column (longest path from a root) ----
-  // This mirrors "delay" conceptually: a course's column is how many
-  // prereq steps deep it sits, which is a decent visual proxy even
-  // before the real scores are wired in.
+  // ---- Group courses by term for column layout ----
+  // Uses the term field from the backend (1-8 for each semester).
+  // Falls back to prereq depth if term is missing.
   const columns = useMemo(() => {
     const col = new Map();
     const visiting = new Set();
 
     function depthOf(id) {
       if (col.has(id)) return col.get(id);
-      if (visiting.has(id)) return 0; // guards against accidental cycles
+      if (visiting.has(id)) return 0;
       visiting.add(id);
       const parents = parentsOf.get(id) || [];
       const depth = parents.length === 0
@@ -64,7 +63,14 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
       return depth;
     }
 
-    courses.forEach((c) => depthOf(c.id));
+    courses.forEach((c) => {
+      if (c.term != null) {
+        col.set(c.id, c.term - 1); // term is 1-indexed, columns are 0-indexed
+      } else {
+        depthOf(c.id);
+      }
+    });
+
     return col;
   }, [courses, parentsOf]);
 
@@ -110,8 +116,6 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
       }
     }
 
-    // Longest path through hoveredId: longest path ending at it (via parents)
-    // plus longest path starting from it (via children).
     function longestChainBack(id, seen = new Set()) {
       const parents = parentsOf.get(id) || [];
       if (parents.length === 0) return [id];
@@ -147,9 +151,20 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
     onSelectCourse?.(course);
   }
 
+  // ---- Term labels for column headers ----
+  const termLabels = useMemo(() => {
+    const labels = new Map();
+    courses.forEach((c) => {
+      if (c.term != null) {
+        labels.set(c.term - 1, `Semester ${c.term}`);
+      }
+    });
+    return labels;
+  }, [courses]);
+
   return (
     <div style={{ overflow: "auto", border: "1px solid #333", borderRadius: 8 }}>
-      <svg width={width} height={height} style={{ background: "#0f1115" }}>
+      <svg width={width} height={height + 30} style={{ background: "#0f1115" }}>
         <defs>
           <marker id="arrow-prereq" viewBox="0 0 10 10" refX="9" refY="5"
                   markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -161,6 +176,21 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
           </marker>
         </defs>
 
+        {/* Semester column headers */}
+        {[...termLabels.entries()].map(([col, label]) => (
+          <text
+            key={col}
+            x={MARGIN + col * COLUMN_GAP + NODE_WIDTH / 2}
+            y={20}
+            fill="#58a6ff"
+            fontSize={11}
+            fontWeight={600}
+            textAnchor="middle"
+          >
+            {label}
+          </text>
+        ))}
+
         {/* Edges */}
         {edges.map((e, i) => {
           const from = positions.get(e.source);
@@ -168,9 +198,9 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
           if (!from || !to) return null;
 
           const x1 = from.x + NODE_WIDTH;
-          const y1 = from.y + NODE_HEIGHT / 2;
+          const y1 = from.y + NODE_HEIGHT / 2 + 30;
           const x2 = to.x;
-          const y2 = to.y + NODE_HEIGHT / 2;
+          const y2 = to.y + NODE_HEIGHT / 2 + 30;
           const midX = (x1 + x2) / 2;
 
           const isHighlighted =
@@ -178,7 +208,6 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
             (blockingSet.has(e.target) || e.source === hoveredId) &&
             (blockingSet.has(e.source) || e.source === hoveredId);
           const isDelay = delaySet.has(e.source) && delaySet.has(e.target);
-
           const isCoreq = e.type === "coreq";
 
           return (
@@ -209,7 +238,7 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
           return (
             <g
               key={c.id}
-              transform={`translate(${pos.x}, ${pos.y})`}
+              transform={`translate(${pos.x}, ${pos.y + 30})`}
               onMouseEnter={() => setHoveredId(c.id)}
               onMouseLeave={() => setHoveredId(null)}
               onClick={() => handleSelect(c)}
@@ -225,10 +254,10 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
                 opacity={dimmed ? 0.35 : 1}
               />
               <text x={10} y={18} fill="#e6edf3" fontSize={12} fontWeight={600}>
-                {c.prefix} {c.number || ""}
+                {c.prefix === "0" || !c.prefix ? (c.name || "Elective") : `${c.prefix} ${c.number || ""}`}
               </text>
               <text x={10} y={34} fill="#8b949e" fontSize={10}>
-                {c.name.length > 22 ? c.name.slice(0, 20) + "…" : c.name}
+                {c.prefix === "0" || !c.prefix ? "" : (c.name && c.name.length > 22 ? c.name.slice(0, 20) + "…" : c.name || "")}
               </text>
             </g>
           );
