@@ -180,15 +180,43 @@ def compute_scores(G):
             if longest_from[succ] + 1 > longest_from[node]:
                 longest_from[node] = longest_from[succ] + 1
 
+    course_data = {
+        row[0]: {'failure_rate': row[1], 'frequency': row[2]}
+        for row in cursor.execute('SELECT id, failure_rate, frequency FROM courses').fetchall()
+    }
+
     for node in G.nodes():
         blocking = len(nx.descendants(G, node))
-        # delay = longest path through this node; -1 avoids double-counting the node itself
         delay = longest_to[node] + longest_from[node] - 1
 
+        rate = course_data[node]['failure_rate']
+        if rate is None:
+            failure = 0
+        elif rate <= 5:
+            failure = 0
+        elif rate <= 10:
+            failure = 1
+        elif rate <= 15:
+            failure = 2
+        elif rate <= 20:
+            failure = 3
+        else:
+            failure = 4
+
+        freq = course_data[node]['frequency']
+        if freq is None or freq >= 3:
+            frequency = 0
+        elif freq == 2:
+            frequency = 1
+        else:
+            frequency = 2
+
+        total = blocking + delay + failure + frequency
+
         cursor.execute('''
-            INSERT INTO scores (course_id, blocking, delay)
-            VALUES (?, ?, ?)
-        ''', (node, blocking, delay))
+            INSERT INTO scores (course_id, blocking, delay, failure, frequency, total)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (node, blocking, delay, failure, frequency, total))
 
     conn.commit()
     conn.close()
@@ -206,8 +234,7 @@ def get_curriculum():
     # "pathway" placeholder courses like capstone/electives).
     courses_rows = cursor.execute('''
         SELECT c.id, c.course_id, c.prefix, c.number, c.term,
-               c.credit_hours, c.failure_rate, c.frequency,
-               s.blocking, s.delay, s.total
+               c.credit_hours, s.blocking, s.delay, s.failure, s.frequency, s.total
         FROM courses c
         LEFT JOIN scores s ON c.id = s.course_id
     ''').fetchall()
@@ -229,7 +256,7 @@ def get_curriculum():
 
     courses = []
     for row in courses_rows:
-        db_id, csv_course_id, prefix, number, term, credit_hours, failure_rate, frequency, blocking, delay, total = row
+        db_id, csv_course_id, prefix, number, term, credit_hours, blocking, delay, failure, frequency, total = row
         courses.append({
             'id': db_id,
             'course_id': csv_course_id,
@@ -237,15 +264,15 @@ def get_curriculum():
             'number': number,
             'term': term,
             'credit_hours': credit_hours,
-            'failure_rate': failure_rate,
-            'frequency': frequency,
             'blocking': blocking,
             'delay': delay,
+            'failure': failure,
+            'frequency': frequency,
             'total': total,
             'prerequisites': prereq_map.get(db_id, [])
         })
 
-    curriculum_total = sum((c['blocking'] or 0) + (c['delay'] or 0) for c in courses)
+    curriculum_total = sum(c['total'] or 0 for c in courses)
 
     return jsonify({
         'curriculum_total': curriculum_total,
