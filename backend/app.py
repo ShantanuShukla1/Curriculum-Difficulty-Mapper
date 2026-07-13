@@ -52,9 +52,6 @@ def init_db():
             total INTEGER
         );
     ''')
-    cursor.execute('DELETE FROM scores')
-    cursor.execute('DELETE FROM courses')
-    cursor.execute('DELETE FROM prerequisites')
     conn.commit()
     conn.close()
 
@@ -141,16 +138,12 @@ def import_csv(filepath):
     conn.commit()
     conn.close()
 
-# TODO: hardcoded for development — import_csv should be called from the /upload endpoint instead
-
-import_csv('CS_Curr.csv')
-
 def build_graph():
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
     
     edges = cursor.execute(
-        'SELECT prereq_id, course_id FROM prerequisites'
+        "SELECT prereq_id, course_id FROM prerequisites WHERE type IN ('prereq', 'coreq')"
     ).fetchall()
 
     # Use autoincrement id (not course_id) so pathway rows with duplicate/null course_ids
@@ -167,6 +160,9 @@ def build_graph():
 def compute_scores(G):
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
+
+    if not nx.is_directed_acyclic_graph(G):
+        raise ValueError("Curriculum graph contains a cycle — check for circular prerequisites/corequisites")
 
     topo = list(nx.topological_sort(G))
 
@@ -225,9 +221,6 @@ def compute_scores(G):
     conn.commit()
     conn.close()
 
-G = build_graph()
-compute_scores(G)
-
 @app.route('/curriculum', methods=['GET'])
 def get_curriculum():
     conn = sqlite3.connect('curriculum.db')
@@ -278,9 +271,60 @@ def get_curriculum():
         })
 
     curriculum_total = sum(c['total'] or 0 for c in courses)
+    total_blocking = sum(c['blocking'] or 0 for c in courses)
+    total_delay = sum(c['delay'] or 0 for c in courses)
+    total_failure = sum(c['failure'] or 0 for c in courses)
+    total_frequency = sum(c['frequency'] or 0 for c in courses)
 
     return jsonify({
         'curriculum_total': curriculum_total,
+        'total_blocking': total_blocking,
+        'total_delay': total_delay,
+        'total_failure': total_failure,
+        'total_frequency': total_frequency,
+        'courses': courses
+    })
+
+@app.route('/curriculumtest', methods=['GET'])
+def get_curriculum_test():
+    conn = sqlite3.connect('curriculum.db')
+    cursor = conn.cursor()
+
+    courses_rows = cursor.execute('''
+        SELECT c.id, c.course_id, c.name, c.prefix, c.number, c.term,
+               c.failure_rate, c.frequency, s.blocking, s.delay
+        FROM courses c
+        LEFT JOIN scores s ON c.id = s.course_id
+    ''').fetchall()
+
+    conn.close()
+
+    courses = []
+    for row in courses_rows:
+        db_id, csv_course_id, name, prefix, number, term, failure_rate, frequency, blocking, delay = row
+        total = (blocking or 0) + (delay or 0)
+        courses.append({
+            'id': db_id,
+            'course_id': csv_course_id,
+            'name': name,
+            'prefix': prefix,
+            'number': number,
+            'term': term,
+            'failure_rate': failure_rate,
+            'frequency': frequency,
+            'blocking': blocking,
+            'delay': delay,
+            'total': total,
+        })
+
+    curriculum_total = sum(c['total'] for c in courses)
+    total_blocking = sum(c['blocking'] or 0 for c in courses)
+    total_delay = sum(c['delay'] or 0 for c in courses)
+
+    return jsonify({
+        'curriculum_total': curriculum_total,
+        'total_blocking': total_blocking,
+        'total_delay': total_delay,
         'courses': courses
     })
 
@@ -296,6 +340,12 @@ def upload_csv():
 
     try:
         init_db()
+        conn = sqlite3.connect('curriculum.db')
+        conn.execute('DELETE FROM scores')
+        conn.execute('DELETE FROM courses')
+        conn.execute('DELETE FROM prerequisites')
+        conn.commit()
+        conn.close()
         import_csv(tmp_path)
         G = build_graph()
         compute_scores(G)
