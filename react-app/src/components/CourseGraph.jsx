@@ -4,13 +4,15 @@ import { useMemo, useState } from "react";
 // CourseGraph
 //
 // Renders the curriculum as a layered DAG (courses -> their unlocked
-// courses, left to right). Handles the three "Visual Effects" from the
+// courses, left to right). Handles the "Visual Effects" from the
 // instructions doc:
 //   1. Click a course -> onSelectCourse fires so a detail panel can show
 //      its blocking / delay / failure / frequency / total scores.
 //   2. Prereq vs coreq edges are styled differently (solid vs dashed).
 //   3. Hovering a course highlights the courses it blocks (descendants)
 //      and, separately, the courses on its longest prereq chain (delay).
+//   4. Hovering either side of a corequisite pair highlights the edge
+//      between them in solid orange, regardless of which side is hovered.
 //
 // Props:
 //   courses: [{ id, prefix, number, term, name, scores }]
@@ -101,8 +103,12 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
   // ---- Hover highlight sets ----
   // Blocking set: every descendant of the hovered course.
   // Delay set: the single longest prereq->this->descendant chain it sits on.
-  const { blockingSet, delaySet } = useMemo(() => {
-    if (!hoveredId) return { blockingSet: new Set(), delaySet: new Set() };
+  // Coreq partners: every course connected to the hovered course by a
+  // corequisite edge (in either direction).
+  const { blockingSet, delaySet, coreqPartners } = useMemo(() => {
+    if (!hoveredId) {
+      return { blockingSet: new Set(), delaySet: new Set(), coreqPartners: new Set() };
+    }
 
     const blockingSet = new Set();
     const stack = [hoveredId];
@@ -143,8 +149,16 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
     const forward = longestChainForward(hoveredId);
     const delaySet = new Set([...back, ...forward]);
 
-    return { blockingSet, delaySet };
-  }, [hoveredId, childrenOf, parentsOf]);
+    const coreqPartners = new Set();
+    edges.forEach((e) => {
+      if (e.type === "coreq" && (e.source === hoveredId || e.target === hoveredId)) {
+        coreqPartners.add(e.source);
+        coreqPartners.add(e.target);
+      }
+    });
+
+    return { blockingSet, delaySet, coreqPartners };
+  }, [hoveredId, childrenOf, parentsOf, edges]);
 
   function handleSelect(course) {
     setSelectedId(course.id);
@@ -163,8 +177,27 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
   }, [courses]);
 
   return (
-    <div style={{ overflow: "auto", border: "1px solid #333", borderRadius: 8 }}>
-      <svg width={width} height={height + 30} style={{ background: "#0f1115" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        border: "1px solid #333",
+        borderRadius: 8,
+        overflow: "hidden",
+        boxSizing: "border-box",
+      }}
+    >
+      {/* Graph area scales to fit whatever space it's given (all 8
+          semesters + all rows), so it never needs to scroll. */}
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <svg
+          width="100%"
+          height="100%"
+          viewBox={`0 0 ${width} ${height + 30}`}
+          preserveAspectRatio="xMinYMin meet"
+          style={{ background: "#0f1115", display: "block" }}
+        >
         <defs>
           <marker id="arrow-prereq" viewBox="0 0 10 10" refX="9" refY="5"
                   markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -181,10 +214,10 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
           <text
             key={col}
             x={MARGIN + col * COLUMN_GAP + NODE_WIDTH / 2}
-            y={20}
+            y={22}
             fill="#58a6ff"
-            fontSize={11}
-            fontWeight={600}
+            fontSize={16}
+            fontWeight={700}
             textAnchor="middle"
           >
             {label}
@@ -203,23 +236,35 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
           const y2 = to.y + NODE_HEIGHT / 2 + 30;
           const midX = (x1 + x2) / 2;
 
+          const isCoreq = e.type === "coreq";
+          const isCoreqHover =
+            isCoreq && hoveredId && (e.source === hoveredId || e.target === hoveredId);
           const isHighlighted =
             hoveredId &&
             (blockingSet.has(e.target) || e.source === hoveredId) &&
             (blockingSet.has(e.source) || e.source === hoveredId);
           const isDelay = delaySet.has(e.source) && delaySet.has(e.target);
-          const isCoreq = e.type === "coreq";
+
+          const stroke = isCoreqHover
+            ? "#d29922"
+            : isDelay
+            ? "#58a6ff"
+            : isHighlighted
+            ? "#3fb950"
+            : isCoreq
+            ? "#d29922"
+            : "#4b525c";
 
           return (
             <path
               key={i}
               d={`M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`}
               fill="none"
-              stroke={isDelay ? "#58a6ff" : isHighlighted ? "#3fb950" : isCoreq ? "#d29922" : "#4b525c"}
-              strokeWidth={isDelay || isHighlighted ? 2.5 : 1.5}
+              stroke={stroke}
+              strokeWidth={isCoreqHover || isDelay || isHighlighted ? 2.5 : 1.5}
               strokeDasharray={isCoreq ? "6,4" : undefined}
               markerEnd={isCoreq ? "url(#arrow-coreq)" : "url(#arrow-prereq)"}
-              opacity={hoveredId && !isHighlighted && !isDelay ? 0.15 : 1}
+              opacity={hoveredId && !isHighlighted && !isDelay && !isCoreqHover ? 0.15 : 1}
             />
           );
         })}
@@ -233,7 +278,8 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
           const isSelected = selectedId === c.id;
           const isInBlocking = blockingSet.has(c.id);
           const isInDelay = delaySet.has(c.id);
-          const dimmed = hoveredId && !isHovered && !isInBlocking && !isInDelay;
+          const isCoreqPartner = coreqPartners.has(c.id);
+          const dimmed = hoveredId && !isHovered && !isInBlocking && !isInDelay && !isCoreqPartner;
 
           return (
             <g
@@ -262,10 +308,11 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
             </g>
           );
         })}
-      </svg>
+        </svg>
+      </div>
 
-      {/* Legend */}
-      <div style={{ display: "flex", gap: 20, padding: "10px 14px", fontSize: 12, color: "#8b949e" }}>
+      {/* Legend: fixed height, always visible, never scaled or scrolled off */}
+      <div style={{ display: "flex", gap: 20, padding: "8px 14px", fontSize: 12, color: "#8b949e", flexShrink: 0 }}>
         <LegendLine color="#4b525c" label="Prerequisite" dashed={false} />
         <LegendLine color="#d29922" label="Corequisite" dashed={true} />
         <LegendLine color="#58a6ff" label="Longest chain (hover)" dashed={false} />
