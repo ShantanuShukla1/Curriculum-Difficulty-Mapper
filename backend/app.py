@@ -64,7 +64,7 @@ init_db()
 # Prompt: "Write the CSV import logic to parse the curriculum CSV into the SQLite database, inserting courses and their prerequisite/corequisite relationships."
 # Modifications: Removed filter excluding rows where Prefix == '0' to retain placeholder courses (e.g. capstone, theory) that may need to be displayed on the frontend
 # Reason: Need to populate database with full curriculum data including courses with no scoring relationships
-def import_csv(filepath):
+def import_csv(filepath, dataset_id):
     # CSV has 7 header/metadata rows before the actual column headers
     df = pd.read_csv(filepath, header=7)
 
@@ -103,9 +103,9 @@ def import_csv(filepath):
         course_name = course_name_raw if course_name_raw not in ('nan', '') else None
 
         cursor.execute('''
-            INSERT INTO courses (course_id, name, prefix, number, term, credit_hours, failure_rate, frequency)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (course_id, course_name, prefix, number, term, credit_hours, failure_rate, frequency))
+            INSERT INTO courses (dataset_id, course_id, name, prefix, number, term, credit_hours, failure_rate, frequency)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (dataset_id, course_id, course_name, prefix, number, term, credit_hours, failure_rate, frequency))
 
         db_id = cursor.lastrowid
         if course_id is not None:
@@ -138,22 +138,26 @@ def import_csv(filepath):
     conn.commit()
     conn.close()
 
-def build_graph():
+def build_graph(dataset_id):
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
     
+    # Use autoincrement id (not course_id) so pathway rows with duplicate/null course_ids
+    # remain distinct nodes
+    db_ids = [row[0] for row in cursor.execute(
+        'SELECT id FROM courses WHERE dataset_id = ?', (dataset_id,)
+    ).fetchall()]
+    id_set = set(db_ids)
+
     edges = cursor.execute(
         "SELECT prereq_id, course_id FROM prerequisites WHERE type IN ('prereq', 'coreq')"
     ).fetchall()
-
-    # Use autoincrement id (not course_id) so pathway rows with duplicate/null course_ids
-    # remain distinct nodes
-    db_ids = cursor.execute('SELECT id FROM courses').fetchall()
+    edges = [e for e in edges if e[0] in id_set and e[1] in id_set]
 
     conn.close()
 
     G = nx.DiGraph()
-    G.add_nodes_from(row[0] for row in db_ids)
+    G.add_nodes_from(db_ids)
     G.add_edges_from(edges)
     return G
 
@@ -334,6 +338,9 @@ def upload_csv():
     if not file:
         return jsonify({"status": "error", "message": "No file provided"}), 400
 
+    #Optional url name
+    label = request.form.get('label') or file.filename
+
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
         tmp_path = tmp.name
         file.save(tmp_path)
@@ -341,13 +348,15 @@ def upload_csv():
     try:
         init_db()
         conn = sqlite3.connect('curriculum.db')
-        conn.execute('DELETE FROM scores')
-        conn.execute('DELETE FROM courses')
-        conn.execute('DELETE FROM prerequisites')
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO datasets (label) VALUES (?)', (label,))
+        dataset_id = cursor.lastrowid
+
         conn.commit()
         conn.close()
-        import_csv(tmp_path)
-        G = build_graph()
+
+        import_csv(tmp_path, dataset_id)
+        G = build_graph(dataset_id)
         compute_scores(G)
     finally:
         os.unlink(tmp_path)

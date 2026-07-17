@@ -10,8 +10,12 @@
 // so this file can just pass ids straight through.
 // ---------------------------------------------------------------------
 
-export async function fetchCurriculum(baseUrl = "http://localhost:5000") {
-  const res = await fetch(`${baseUrl}/curriculum`);
+export async function fetchCurriculum(datasetId) {
+  const url = datasetId
+    ? `http://localhost:5000/curriculum?dataset_id=${datasetId}`
+    : `http://localhost:5000/curriculum`;
+
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`Failed to fetch /curriculum: ${res.status} ${res.statusText}`);
   }
