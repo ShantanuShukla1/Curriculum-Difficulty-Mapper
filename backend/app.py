@@ -23,8 +23,14 @@ def init_db():
     # Modifications: Placed the given SQLite into the relevant python code and removed unnecessary columns
     # Reason: Need to move info from CSV to database
     cursor.executescript('''
+        CREATE TABLE IF NOT EXISTS datasets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS courses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dataset_id INTEGER,
             course_id INTEGER,
             name TEXT,
             prefix TEXT,
@@ -32,7 +38,7 @@ def init_db():
             failure_rate REAL,
             frequency INTEGER,
             term INTEGER,
-            credit_hours INTEGER        
+            credit_hours INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS prerequisites (
