@@ -225,7 +225,7 @@ def compute_scores(G):
     conn.commit()
     conn.close()
 
-@app.route('/curriculum', methods=['GET'])
+@app.route('/api/curriculum', methods=['GET'])
 def get_curriculum():
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
@@ -289,7 +289,7 @@ def get_curriculum():
         'courses': courses
     })
 
-@app.route('/curriculumtest', methods=['GET'])
+@app.route('/api/curriculumtest', methods=['GET'])
 def get_curriculum_test():
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
@@ -332,7 +332,7 @@ def get_curriculum_test():
         'courses': courses
     })
 
-@app.route('/upload', methods=['POST'])
+@app.route('/api/upload', methods=['POST'])
 def upload_csv():
     file = request.files.get('file')
     if not file:
