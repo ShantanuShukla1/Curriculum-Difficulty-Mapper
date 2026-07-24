@@ -4,4 +4,13 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://currdiffmap.discovery.cs.vt.edu',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 })
