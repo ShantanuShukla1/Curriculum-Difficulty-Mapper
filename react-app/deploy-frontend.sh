@@ -1,16 +1,15 @@
 #!/bin/bash
 
-set -e
-
 TAG=${1:-latest}
 
-IMAGE="container.cs.vt.edu/nathan925/jsn-capstone/frontend:$TAG"
+echo "Building frontend image with tag: $TAG"
 
-echo "Building frontend image..."
-docker build --platform=linux/amd64 -t "$IMAGE" .
+docker build --platform=linux/amd64 \
+  -t container.cs.vt.edu/nathan925/jsn-capstone/frontend:$TAG \
+  .
 
 echo "Pushing frontend image..."
-docker push "$IMAGE"
 
-echo "Frontend image pushed successfully:"
-echo "$IMAGE"
+docker push container.cs.vt.edu/nathan925/jsn-capstone/frontend:$TAG
+
+echo "Done."
