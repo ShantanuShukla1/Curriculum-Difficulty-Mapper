@@ -1,36 +1,33 @@
-// ---------------------------------------------------------------------
-// fetchCurriculum
-//
-// Talks to the real backend and reshapes its response into the
-// { courses, edges } format CourseGraph.jsx expects.
-//
-// Note: this used to need a workaround for a backend bug where `id` was
-// the CSV course_id (which could be null/duplicated for pathway courses).
-// That's been fixed — /curriculum now returns the database's unique id,
-// so this file can just pass ids straight through.
-// ---------------------------------------------------------------------
+// Fetches curriculum data from the backend.
+// The frontend and backend are exposed through the same domain,
+// so API requests use the /api prefix.
 
 export async function fetchCurriculum(datasetId) {
   const url = datasetId
-    ? `http://localhost:5000/api/curriculum?dataset_id=${datasetId}`
-    : `http://localhost:5000/api/curriculum`;
+    ? `/api/curriculum?dataset_id=${encodeURIComponent(datasetId)}`
+    : "/api/curriculum";
 
   const res = await fetch(url);
+
   if (!res.ok) {
-    throw new Error(`Failed to fetch /curriculum: ${res.status} ${res.statusText}`);
+    throw new Error(
+      `Failed to fetch curriculum: ${res.status} ${res.statusText}`
+    );
   }
+
   const data = await res.json();
+
   return transformCurriculumResponse(data);
 }
 
 export function transformCurriculumResponse(data) {
-  const courses = data.courses.map((c) => ({
+  const courses = (data.courses || []).map((c) => ({
     id: c.id,
     courseId: c.course_id,
     prefix: c.prefix,
     number: c.number,
     term: c.term,
-    name: c.name || `${c.prefix} ${c.number || ""}`.trim(),
+    name: c.name || `${c.prefix || ""} ${c.number || ""}`.trim(),
     scores: {
       blocking: c.blocking ?? 0,
       delay: c.delay ?? 0,
@@ -40,7 +37,7 @@ export function transformCurriculumResponse(data) {
     },
   }));
 
-  const edges = data.courses.flatMap((c) =>
+  const edges = (data.courses || []).flatMap((c) =>
     (c.prerequisites || []).map((p) => ({
       source: p.id,
       target: c.id,
@@ -48,5 +45,8 @@ export function transformCurriculumResponse(data) {
     }))
   );
 
-  return { courses, edges };
+  return {
+    courses,
+    edges,
+  };
 }

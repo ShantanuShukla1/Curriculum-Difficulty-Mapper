@@ -1,69 +1,101 @@
 import { useEffect, useMemo, useState } from "react";
 import CourseGraph from "./components/CourseGraph";
-import CourseDetailPanel, { CurriculumTotalsPanel } from "./components/CourseDetailPanel";
+import CourseDetailPanel, {
+  CurriculumTotalsPanel,
+} from "./components/CourseDetailPanel";
 import CsvUploadForm from "./components/CsvUploadForm";
 import { fetchCurriculum } from "./api/curriculum";
-
-// ---------------------------------------------------------------------
-// CurriculumMapLive
-//
-// Same as CurriculumMapExample, but pulls real data from the running
-// Flask backend (localhost:5000) instead of mock data. Use this once
-// app.py is running locally alongside `npm run dev`.
-//
-// Layout: the whole app is locked to one viewport (100vh, no page-level
-// scrolling). The graph fills the remaining vertical space and scrolls
-// internally if it's too big; the course detail panel, curriculum-wide
-// totals, and CSV upload form sit together in a compact row at the
-// bottom, next to the graph's legend.
-// ---------------------------------------------------------------------
 
 export default function CurriculumMapLive() {
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [graphData, setGraphData] = useState(null);
   const [error, setError] = useState(null);
 
-  function loadCurriculum() {
+  async function loadCurriculum() {
     setGraphData(null);
     setError(null);
-    fetchCurriculum()
-      .then(setGraphData)
-      .catch((err) => setError(err.message));
+    setSelectedCourse(null);
+
+    try {
+      const data = await fetchCurriculum();
+      setGraphData(data);
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   useEffect(() => {
     loadCurriculum();
   }, []);
 
-  // Sum of every course's scores across the whole curriculum, per
-  // stakeholder request.
   const totals = useMemo(() => {
-    if (!graphData) return null;
+    if (!graphData) {
+      return null;
+    }
+
     return graphData.courses.reduce(
-      (acc, c) => {
-        acc.blocking += c.scores.blocking;
-        acc.delay += c.scores.delay;
-        acc.failure += c.scores.failure;
-        acc.frequency += c.scores.frequency;
-        acc.total += c.scores.total;
+      (acc, course) => {
+        acc.blocking += course.scores.blocking;
+        acc.delay += course.scores.delay;
+        acc.failure += course.scores.failure;
+        acc.frequency += course.scores.frequency;
+        acc.total += course.scores.total;
+
         return acc;
       },
-      { blocking: 0, delay: 0, failure: 0, frequency: 0, total: 0 }
+      {
+        blocking: 0,
+        delay: 0,
+        failure: 0,
+        frequency: 0,
+        total: 0,
+      }
     );
   }, [graphData]);
 
   if (error) {
     return (
-      <div style={{ padding: 20, color: "#f85149" }}>
-        Couldn't reach the backend: {error}
-        <br />
-        Make sure app.py is running (python app.py, from the backend folder).
+      <div
+        style={{
+          padding: 20,
+          color: "#f85149",
+          background: "#0d1117",
+          minHeight: "100vh",
+        }}
+      >
+        <h3>Unable to load curriculum data</h3>
+        <p>{error}</p>
+
+        <button
+          onClick={loadCurriculum}
+          style={{
+            padding: "8px 14px",
+            background: "#1f6feb",
+            color: "#fff",
+            border: "none",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          Retry
+        </button>
       </div>
     );
   }
 
   if (!graphData) {
-    return <div style={{ padding: 20, color: "#8b949e" }}>Loading curriculum data…</div>;
+    return (
+      <div
+        style={{
+          padding: 20,
+          color: "#8b949e",
+          background: "#0d1117",
+          minHeight: "100vh",
+        }}
+      >
+        Loading curriculum data...
+      </div>
+    );
   }
 
   return (
@@ -80,9 +112,6 @@ export default function CurriculumMapLive() {
         overflow: "hidden",
       }}
     >
-      {/* Graph fills all remaining vertical space. It scales itself
-          (via viewBox) to fit whatever room it's given, so neither the
-          page nor the graph ever needs to scroll. */}
       <div style={{ flex: 1, minHeight: 0 }}>
         <CourseGraph
           courses={graphData.courses}
@@ -91,8 +120,6 @@ export default function CurriculumMapLive() {
         />
       </div>
 
-      {/* Bottom row: detail panel, curriculum totals, and upload sit
-          together near the legend, instead of stacked on the side. */}
       <div
         style={{
           display: "flex",
@@ -102,7 +129,9 @@ export default function CurriculumMapLive() {
         }}
       >
         <CourseDetailPanel course={selectedCourse} />
+
         <CurriculumTotalsPanel totals={totals} />
+
         <CsvUploadForm onUploadSuccess={loadCurriculum} />
       </div>
     </div>

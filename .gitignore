@@ -1,5 +1,41 @@
+# Python virtual environments
 venv/
+.venv/
 backend/venv/
-backend/curriculum.db
+
+# Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# SQLite database
+backend/curriculum.db
+
+# Node dependencies
+node_modules/
+react-app/node_modules/
+
+# Frontend build output
+dist/
+react-app/dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp

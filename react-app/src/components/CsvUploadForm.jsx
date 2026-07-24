@@ -1,16 +1,8 @@
 import { useState } from "react";
 
-// ---------------------------------------------------------------------
-// CsvUploadForm
-//
-// Simple file input that POSTs a CSV to the backend's /upload endpoint
-// as multipart/form-data, per Jonathan's request. Shows basic
-// success/error feedback so it's usable as-is, not just a bare input.
-// ---------------------------------------------------------------------
-
-export default function CsvUploadForm({ baseUrl = "http://localhost:5000", onUploadSuccess }) {
+export default function CsvUploadForm({ onUploadSuccess }) {
   const [file, setFile] = useState(null);
-  const [status, setStatus] = useState("idle"); // idle | uploading | success | error
+  const [status, setStatus] = useState("idle");
   const [message, setMessage] = useState("");
 
   function handleFileChange(e) {
@@ -33,18 +25,23 @@ export default function CsvUploadForm({ baseUrl = "http://localhost:5000", onUpl
     formData.append("file", file);
 
     try {
-      const res = await fetch(`${baseUrl}/api/upload`, {
+      const res = await fetch("/api/upload", {
         method: "POST",
-        body: formData, // browser sets multipart/form-data + boundary automatically
+        body: formData,
       });
 
       if (!res.ok) {
-        throw new Error(`Upload failed: ${res.status} ${res.statusText}`);
+        throw new Error(
+          `Upload failed: ${res.status} ${res.statusText}`
+        );
       }
 
       const data = await res.json();
+
       setStatus("success");
       setMessage("Upload complete.");
+      setFile(null);
+
       onUploadSuccess?.(data);
     } catch (err) {
       setStatus("error");
@@ -54,20 +51,33 @@ export default function CsvUploadForm({ baseUrl = "http://localhost:5000", onUpl
 
   return (
     <div style={panelStyle}>
-      <h4 style={{ margin: "0 0 10px 0", color: "#e6edf3" }}>Upload curriculum CSV</h4>
+      <h4 style={{ margin: "0 0 10px 0", color: "#e6edf3" }}>
+        Upload curriculum CSV
+      </h4>
 
-      <input type="file" accept=".csv" onChange={handleFileChange} style={{ color: "#8b949e" }} />
+      <input
+        type="file"
+        accept=".csv"
+        onChange={handleFileChange}
+        style={{ color: "#8b949e" }}
+      />
 
       <button
         onClick={handleUpload}
         disabled={status === "uploading"}
         style={buttonStyle}
       >
-        {status === "uploading" ? "Uploading…" : "Upload"}
+        {status === "uploading" ? "Uploading..." : "Upload"}
       </button>
 
       {message && (
-        <p style={{ color: status === "error" ? "#f85149" : "#3fb950", fontSize: 13, marginTop: 8 }}>
+        <p
+          style={{
+            color: status === "error" ? "#f85149" : "#3fb950",
+            fontSize: 13,
+            marginTop: 8,
+          }}
+        >
           {message}
         </p>
       )}
