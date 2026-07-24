@@ -12,8 +12,8 @@
 
 export async function fetchCurriculum(datasetId) {
   const url = datasetId
-    ? `http://localhost:5000/curriculum?dataset_id=${datasetId}`
-    : `http://localhost:5000/curriculum`;
+    ? `http://localhost:5000/api/curriculum?dataset_id=${datasetId}`
+    : `http://localhost:5000/api/curriculum`;
 
   const res = await fetch(url);
   if (!res.ok) {

@@ -33,7 +33,7 @@ export default function CsvUploadForm({ baseUrl = "http://localhost:5000", onUpl
     formData.append("file", file);
 
     try {
-      const res = await fetch(`${baseUrl}/upload`, {
+      const res = await fetch(`${baseUrl}/api/upload`, {
         method: "POST",
         body: formData, // browser sets multipart/form-data + boundary automatically
       });
