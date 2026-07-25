@@ -236,6 +236,33 @@ def get_curriculum():
     conn = sqlite3.connect('curriculum.db')
     cursor = conn.cursor()
 
+    # BUGFIX: this endpoint previously queried the courses/prerequisites
+    # tables with no dataset_id filter at all, so every course from every
+    # CSV ever uploaded was returned together — new uploads appeared to
+    # "stack" onto old ones in the graph instead of replacing them.
+    #
+    # Now: honor an explicit ?dataset_id= query param if given, otherwise
+    # default to the most recently uploaded dataset (matches how the
+    # frontend currently calls this endpoint — with no id — right after
+    # each upload).
+    dataset_id = request.args.get('dataset_id', type=int)
+    if dataset_id is None:
+        latest = cursor.execute(
+            'SELECT id FROM datasets ORDER BY id DESC LIMIT 1'
+        ).fetchone()
+        dataset_id = latest[0] if latest else None
+
+    if dataset_id is None:
+        conn.close()
+        return jsonify({
+            'curriculum_total': 0,
+            'total_blocking': 0,
+            'total_delay': 0,
+            'total_failure': 0,
+            'total_frequency': 0,
+            'courses': []
+        })
+
     # Use c.id (the database's own unique autoincrement id) instead of
     # c.course_id (the raw CSV id, which can be null or duplicated for
     # "pathway" placeholder courses like capstone/electives).
@@ -244,15 +271,19 @@ def get_curriculum():
                c.credit_hours, s.blocking, s.delay, s.failure, s.frequency, s.total
         FROM courses c
         LEFT JOIN scores s ON c.id = s.course_id
-    ''').fetchall()
+        WHERE c.dataset_id = ?
+    ''', (dataset_id,)).fetchall()
 
-    # prerequisites already stores db ids directly (course_id/prereq_id in
-    # this table are db ids, not CSV ids) so no join back through the
-    # courses table is needed here at all.
+    # prerequisites stores db ids directly. Filter to this dataset by
+    # joining back through courses on the course_id side — prereq_id will
+    # always belong to the same dataset since import_csv only ever links
+    # ids within a single import run.
     prereq_rows = cursor.execute('''
-        SELECT course_id, prereq_id, type
-        FROM prerequisites
-    ''').fetchall()
+        SELECT p.course_id, p.prereq_id, p.type
+        FROM prerequisites p
+        JOIN courses c ON p.course_id = c.id
+        WHERE c.dataset_id = ?
+    ''', (dataset_id,)).fetchall()
 
     conn.close()
 
@@ -287,6 +318,7 @@ def get_curriculum():
     total_frequency = sum(c['frequency'] or 0 for c in courses)
 
     return jsonify({
+        'dataset_id': dataset_id,
         'curriculum_total': curriculum_total,
         'total_blocking': total_blocking,
         'total_delay': total_delay,
@@ -367,7 +399,7 @@ def upload_csv():
     finally:
         os.unlink(tmp_path)
 
-    return jsonify({"status": "success"})
+    return jsonify({"status": "success", "dataset_id": dataset_id})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True)
