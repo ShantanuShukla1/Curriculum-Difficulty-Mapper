@@ -1,4 +1,6 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect, session
+from functools import wraps
+from cas import CASClient
 import tempfile
 import os
 import sqlite3
@@ -7,7 +9,91 @@ import networkx as nx
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+
+# SECRET_KEY signs the session cookie so clients can't forge or tamper with it.
+# In development this fallback is fine, but in production you must set a real
+# random value so sessions from one deploy aren't valid in another.
+#
+# K8s: create a Secret manifest with a strong random value, then reference it
+# in your Deployment under spec.containers[].env:
+#
+#   - name: SECRET_KEY
+#     valueFrom:
+#       secretKeyRef:
+#         name: flask-secrets   # name of your Secret object
+#         key: secret-key
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-not-for-production')
+
+# In production the app is served over HTTPS, so the browser should only send
+# the session cookie on encrypted connections.
+#
+# K8s: add to your Deployment's env block (a plain ConfigMap value is fine here
+# since it's not sensitive):
+#   - name: SESSION_COOKIE_SECURE
+#     value: "true"
+if os.environ.get('SESSION_COOKIE_SECURE', '').lower() == 'true':
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# supports_credentials=True lets the browser send the session cookie on
+# cross-origin requests (needed in local dev where the React dev server is on
+# a different port than Flask). The origins list must be explicit — a wildcard
+# "*" is not allowed alongside credentials.
+#
+# K8s: if your frontend and backend share the same public domain (typical when
+# an ingress routes /api/* to Flask and everything else to React), they're
+# same-origin and CORS isn't needed at all. If they're on different subdomains,
+# add the frontend's URL to ALLOWED_ORIGINS in a ConfigMap:
+#   - name: ALLOWED_ORIGINS
+#     value: "https://jsn-capstone.cs.vt.edu"
+CORS(app,
+     supports_credentials=True,
+     origins=os.environ.get('ALLOWED_ORIGINS', 'http://localhost:5173').split(','))
+
+# ---------------------------------------------------------------------------
+# CAS configuration
+# ---------------------------------------------------------------------------
+
+# SERVICE_URL is the public base URL of this Flask backend. CAS appends
+# ?ticket=<ticket> to SERVICE_URL/api/login when redirecting the user back
+# after a successful login, so this must be the URL the CAS server can reach.
+#
+# K8s: set this in a ConfigMap to your backend's ingress URL, e.g.:
+#   - name: SERVICE_URL
+#     value: "https://jsn-capstone-backend.cs.vt.edu"
+# (no trailing slash)
+SERVICE_URL = os.environ.get('SERVICE_URL', 'http://localhost:5000')
+
+# FRONTEND_URL is where Flask sends the user after login/logout succeeds.
+# This should be your React app's public URL.
+#
+# K8s: set in a ConfigMap, e.g.:
+#   - name: FRONTEND_URL
+#     value: "https://jsn-capstone.cs.vt.edu"
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+
+# CAS_SERVER_URL is the VT CAS server. Two options:
+#   VT CAS:    https://login.vt.edu/profile/cas/
+#   VT CS CAS: https://login.cs.vt.edu/cas/
+#
+# K8s: set in a ConfigMap so you can switch without rebuilding the image:
+#   - name: CAS_SERVER_URL
+#     value: "https://login.cs.vt.edu/cas/"
+CAS_SERVER_URL = os.environ.get('CAS_SERVER_URL', 'https://login.cs.vt.edu/cas/')
+
+# CASClient (from python-cas) does two things:
+#   1. Builds the redirect URL that sends the user to the CAS login page.
+#   2. Makes a back-channel HTTP request to CAS to validate the ticket and
+#      get the authenticated username.
+#
+# The trailing "?" in service_url is required — CAS appends ?ticket=... to it,
+# and without the "?" you'd get a URL like .../api/login?ticket=... only if
+# the base already ends with "?".
+cas_client = CASClient(
+    version=2,
+    service_url=f"{SERVICE_URL}/api/login?",
+    server_url=CAS_SERVER_URL,
+)
 
 def init_db():
     conn = sqlite3.connect('curriculum.db')
@@ -231,6 +317,102 @@ def compute_scores(G):
     conn.commit()
     conn.close()
 
+# ---------------------------------------------------------------------------
+# Auth decorator
+# ---------------------------------------------------------------------------
+
+def login_required(f):
+    """
+    Wraps a route so it returns 401 if the user isn't logged in.
+    session['user'] is set by /api/login after CAS validates the ticket.
+    Apply this decorator to any route that should only be accessible to
+    authenticated users.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user' not in session:
+            return jsonify({'error': 'Authentication required. Please log in via /api/login.'}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+# ---------------------------------------------------------------------------
+# CAS auth routes
+# ---------------------------------------------------------------------------
+
+@app.route('/api/login')
+def login():
+    """
+    Handles two cases depending on whether a CAS ticket is in the query string.
+
+    Case 1 — No ticket (?ticket not in URL):
+        The user hasn't authenticated yet. Redirect their browser to the CAS
+        login page. CAS will authenticate them and then redirect back to this
+        same endpoint with ?ticket=<ticket> appended.
+
+    Case 2 — Ticket present (?ticket=ST-...):
+        CAS is returning the user after a successful login. Validate the ticket
+        by making a back-channel HTTP request to CAS (verify_ticket does this).
+        If valid, CAS returns the username; store it in the Flask session and
+        redirect to the frontend. If invalid (expired, reused, wrong service),
+        redirect to the frontend with an error flag.
+    """
+    ticket = request.args.get('ticket')
+
+    if not ticket:
+        # No ticket — redirect the browser to the CAS login page.
+        # get_login_url() builds: {CAS_SERVER_URL}/login?service={SERVICE_URL}/api/login?
+        return redirect(cas_client.get_login_url())
+
+    # Ticket present — validate it against the CAS server.
+    # verify_ticket() returns (username, attributes_dict, pgtiou) on success,
+    # or (None, None, None) if the ticket is invalid or already used.
+    user, attributes, pgtiou = cas_client.verify_ticket(ticket)
+
+    if not user:
+        # Ticket invalid or expired. Redirect to frontend with an error flag
+        # so the UI can display a message instead of silently looping.
+        return redirect(f"{FRONTEND_URL}?error=auth_failed")
+
+    # Ticket valid — store the username in the session.
+    # Flask serialises session to a signed cookie; the signature uses SECRET_KEY
+    # so the client can't forge or modify the session contents.
+    session['user'] = user
+
+    return redirect(FRONTEND_URL)
+
+
+@app.route('/api/logout')
+def logout():
+    """
+    Clears the Flask session (so subsequent requests see no logged-in user)
+    and redirects to the CAS logout endpoint.
+
+    Logging out via CAS also invalidates the user's SSO session, which means
+    they're logged out of *all* CAS-protected services, not just this one.
+    get_logout_url() builds: {CAS_SERVER_URL}/logout?service={FRONTEND_URL}
+    CAS logs them out and redirects back to the frontend.
+    """
+    session.clear()
+    return redirect(cas_client.get_logout_url(redirect_url=FRONTEND_URL))
+
+
+@app.route('/api/user')
+@login_required
+def get_user():
+    """
+    Returns the currently logged-in username.
+    The React frontend calls this on page load to decide whether to show the
+    app or redirect to /api/login. Returns 401 (via login_required) if no
+    active session exists.
+    """
+    return jsonify({'user': session['user']})
+
+
+# ---------------------------------------------------------------------------
+# Curriculum routes (read-only — accessible without login for now)
+# Add @login_required here if you want to restrict viewing to logged-in users.
+# ---------------------------------------------------------------------------
+
 @app.route('/api/curriculum', methods=['GET'])
 def get_curriculum():
     conn = sqlite3.connect('curriculum.db')
@@ -371,6 +553,7 @@ def get_curriculum_test():
     })
 
 @app.route('/api/upload', methods=['POST'])
+@login_required
 def upload_csv():
     file = request.files.get('file')
     if not file:
