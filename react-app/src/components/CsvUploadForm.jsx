@@ -5,12 +5,26 @@ export default function CsvUploadForm({ onUploadSuccess }) {
   const [status, setStatus] = useState("idle");
   const [message, setMessage] = useState("");
 
+  // AI-ASSISTED
+  // Date: 07-20-2026
+  // Developer: Shantanu Shukla
+  // Model: Claude Sonnet 4.6
+  // Prompt: "Reset the status and message state whenever a new file is selected in the file input."
+  // Modifications: None, used as generated.
+  // Reason: Prevents a stale success/error message from a previous upload from lingering after the user picks a new file.
   function handleFileChange(e) {
     setFile(e.target.files[0] || null);
     setStatus("idle");
     setMessage("");
   }
 
+  // AI-ASSISTED
+  // Date: 07-20-2026
+  // Developer: Shantanu Shukla
+  // Model: Claude Sonnet 4.6
+  // Prompt: "Write a CSV upload handler using fetch and FormData that tracks idle/uploading/success/error status, shows an error message on non-2xx responses, and clears the selected file after a successful upload."
+  // Modifications: Added the `res.ok` check with a manually thrown Error including status/statusText, since fetch doesn't reject on HTTP error codes by default.
+  // Reason: Without this the form showed "Upload complete" even when the backend returned a 400/500.
   async function handleUpload() {
     if (!file) {
       setStatus("error");

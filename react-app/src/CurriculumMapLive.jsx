@@ -11,6 +11,13 @@ export default function CurriculumMapLive() {
   const [graphData, setGraphData] = useState(null);
   const [error, setError] = useState(null);
 
+  // AI-ASSISTED
+  // Date: 07-22-2026
+  // Developer: Shantanu Shukla
+  // Model: Claude Sonnet 4.6
+  // Prompt: "Add a retry button and error state to the curriculum loading screen, and reset selectedCourse whenever the curriculum reloads (e.g. after a new CSV upload)."
+  // Modifications: Called loadCurriculum() directly from the Retry button's onClick instead of adding a separate retry function.
+  // Reason: Keeps CSV upload and manual retry sharing the same loading path so both reset selection and error state consistently.
   async function loadCurriculum() {
     setGraphData(null);
     setError(null);
@@ -28,6 +35,13 @@ export default function CurriculumMapLive() {
     loadCurriculum();
   }, []);
 
+  // AI-ASSISTED
+  // Date: 07-22-2026
+  // Developer: Shantanu Shukla
+  // Model: Claude Sonnet 4.6
+  // Prompt: "Write a memoized reducer that sums blocking, delay, failure, frequency, and total scores across every course in the fetched curriculum data, returning null until the data has loaded."
+  // Modifications: Guarded against `graphData` being null before the reduce runs, since this component renders before the initial fetch resolves.
+  // Reason: Needed a single totals object to pass into CurriculumTotalsPanel without recomputing it on every hover/click.
   const totals = useMemo(() => {
     if (!graphData) {
       return null;

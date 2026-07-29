@@ -44,6 +44,13 @@ export default function CourseDetailPanel({ course }) {
   );
 }
 
+// AI-ASSISTED
+// Date: 07-18-2026
+// Developer: Shantanu Shukla
+// Model: Claude Sonnet 4.6
+// Prompt: "Add a second export, CurriculumTotalsPanel, that mirrors CourseDetailPanel's layout but displays summed totals across every course instead of a single course's scores."
+// Modifications: Added an early `if (!totals) return null;` guard, since totals aren't computed yet on first render before CurriculumMapLive finishes loading the curriculum.
+// Reason: Avoid a crash / flash of undefined values before the totals reducer in CurriculumMapLive has run.
 export function CurriculumTotalsPanel({ totals }) {
   if (!totals) return null;
 
@@ -66,6 +73,13 @@ export function CurriculumTotalsPanel({ totals }) {
   );
 }
 
+// AI-ASSISTED
+// Date: 07-18-2026
+// Developer: Shantanu Shukla
+// Model: Claude Sonnet 4.6
+// Prompt: "Create a reusable ScoreRow component for a course score panel that shows a label, value, optional hint text, and an optional bold styling for a totals row."
+// Modifications: Exported ScoreRow separately so CurriculumTotalsPanel could reuse it instead of duplicating the row markup.
+// Reason: Needed identical row styling between the per-course panel and the curriculum-wide totals panel per stakeholder request.
 export function ScoreRow({ label, value, hint, bold }) {
   return (
     <div style={{ marginBottom: 8 }}>

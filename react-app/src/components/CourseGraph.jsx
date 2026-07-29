@@ -48,6 +48,14 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
   // ---- Group courses by term for column layout ----
   // Uses the term field from the backend (1-8 for each semester).
   // Falls back to prereq depth if term is missing.
+  //
+  // AI-ASSISTED
+  // Date: 07-14-2026
+  // Developer: Shantanu Shukla
+  // Model: Claude Sonnet 4.6
+  // Prompt: "Write a memoized layout function that groups courses into columns by their term field, and falls back to computing prerequisite depth via DFS when term is missing, avoiding infinite recursion on cycles."
+  // Modifications: Adjusted the depth fallback to use a `visiting` set instead of throwing on cycles, and mapped the 1-indexed term field to 0-indexed columns to match this app's schema.
+  // Reason: Needed the graph to stay left-to-right by semester even for placeholder/pathway courses that have no term set.
   const columns = useMemo(() => {
     const col = new Map();
     const visiting = new Set();
@@ -105,6 +113,14 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
   // Delay set: the single longest prereq->this->descendant chain it sits on.
   // Coreq partners: every course connected to the hovered course by a
   // corequisite edge (in either direction).
+  //
+  // AI-ASSISTED
+  // Date: 07-16-2026
+  // Developer: Shantanu Shukla
+  // Model: Claude Sonnet 4.6
+  // Prompt: "Given a hovered node, compute the full descendant set (blocking), the single longest prereq-to-descendant chain through that node (delay), and any corequisite partners, using the childrenOf/parentsOf adjacency maps."
+  // Modifications: Rewrote longestChainBack/longestChainForward to pass a per-branch `seen` set instead of a single shared one, so branching prereq trees don't falsely mark sibling paths as already visited.
+  // Reason: Match the "Visual Effects" hover requirements from the instructions doc without recomputing this on every render frame.
   const { blockingSet, delaySet, coreqPartners } = useMemo(() => {
     if (!hoveredId) {
       return { blockingSet: new Set(), delaySet: new Set(), coreqPartners: new Set() };
@@ -224,7 +240,14 @@ export default function CourseGraph({ courses, edges, onSelectCourse }) {
           </text>
         ))}
 
-        {/* Edges */}
+        {/* Edges
+            AI-ASSISTED
+            Date: 07-17-2026
+            Developer: Shantanu Shukla
+            Model: Claude Sonnet 4.6
+            Prompt: "Style SVG path edges differently depending on whether they're a coreq hover, part of the longest delay chain, part of the blocking set, or a normal prereq/coreq edge, with dimmed opacity for unrelated edges on hover."
+            Modifications: Reordered the stroke-color ternary so coreq-hover always wins over delay/blocking coloring, since a corequisite pair should stay visually distinct even when it also sits on the longest chain.
+            Reason: The original AI draft colored delay-chain edges over coreq edges, which made corequisite relationships hard to spot during hover. */}
         {edges.map((e, i) => {
           const from = positions.get(e.source);
           const to = positions.get(e.target);
