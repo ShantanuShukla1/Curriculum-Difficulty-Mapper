@@ -8,6 +8,20 @@ import pandas as pd
 import networkx as nx
 from flask_cors import CORS
 
+# Reserved username for the account that owns datasets uploaded before user
+# ownership existed. Its datasets stay publicly viewable without login so
+# the app still has something to show anonymous visitors out of the box.
+DEMO_USERNAME = 'demo'
+
+# Path to the SQLite database file. Defaults to the working directory for
+# local dev; in K8s this should point inside the persistent volume's mount
+# path so data survives pod restarts.
+#
+# K8s: set in a ConfigMap to a path under your PVC's mountPath, e.g.:
+#   - name: DB_PATH
+#     value: "/data/curriculum.db"
+DB_PATH = os.environ.get('DB_PATH', 'curriculum.db')
+
 app = Flask(__name__)
 
 # SECRET_KEY signs the session cookie so clients can't forge or tamper with it.
@@ -96,7 +110,7 @@ cas_client = CASClient(
 )
 
 def init_db():
-    conn = sqlite3.connect('curriculum.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     # Create tables if they don't already exist.
@@ -109,6 +123,12 @@ def init_db():
     # Modifications: Placed the given SQLite into the relevant python code and removed unnecessary columns
     # Reason: Need to move info from CSV to database
     cursor.executescript('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS datasets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             label TEXT
@@ -143,9 +163,40 @@ def init_db():
             frequency INTEGER,
             total INTEGER
         );
+
+        CREATE TABLE IF NOT EXISTS dataset_shares (
+            dataset_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (dataset_id, user_id)
+        );
     ''')
+
+    # datasets.owner_id was added after the original schema, so existing
+    # databases need it backfilled in place. SQLite has no "ADD COLUMN IF
+    # NOT EXISTS", so check PRAGMA table_info first.
+    # (datasets.share_token from an earlier link-sharing design may still
+    # exist on disk in older databases — it's unused dead data now that
+    # sharing is per-person via dataset_shares, and is safe to ignore.)
+    existing_columns = {row[1] for row in cursor.execute('PRAGMA table_info(datasets)').fetchall()}
+    if 'owner_id' not in existing_columns:
+        cursor.execute('ALTER TABLE datasets ADD COLUMN owner_id INTEGER')
+
+    # Datasets created before ownership existed get assigned to the reserved
+    # "demo" account rather than left with a NULL owner, so every dataset has
+    # a real owner going forward and demo data stays intentionally public.
+    demo_id = get_or_create_user(cursor, DEMO_USERNAME)
+    cursor.execute('UPDATE datasets SET owner_id = ? WHERE owner_id IS NULL', (demo_id,))
+
     conn.commit()
     conn.close()
+
+def get_or_create_user(cursor, username):
+    row = cursor.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
+    if row:
+        return row[0]
+    cursor.execute('INSERT INTO users (username) VALUES (?)', (username,))
+    return cursor.lastrowid
 
 init_db()
 
@@ -160,7 +211,7 @@ def import_csv(filepath, dataset_id):
     # CSV has 7 header/metadata rows before the actual column headers
     df = pd.read_csv(filepath, header=7)
 
-    conn = sqlite3.connect('curriculum.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     # Maps CSV course_id → autoincrement db id, built during first pass.
@@ -231,7 +282,7 @@ def import_csv(filepath, dataset_id):
     conn.close()
 
 def build_graph(dataset_id):
-    conn = sqlite3.connect('curriculum.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Use autoincrement id (not course_id) so pathway rows with duplicate/null course_ids
@@ -254,7 +305,7 @@ def build_graph(dataset_id):
     return G
 
 def compute_scores(G):
-    conn = sqlite3.connect('curriculum.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     if not nx.is_directed_acyclic_graph(G):
@@ -376,7 +427,14 @@ def login():
     # Ticket valid — store the username in the session.
     # Flask serialises session to a signed cookie; the signature uses SECRET_KEY
     # so the client can't forge or modify the session contents.
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    user_id = get_or_create_user(cursor, user)
+    conn.commit()
+    conn.close()
+
     session['user'] = user
+    session['user_id'] = user_id
 
     return redirect(FRONTEND_URL)
 
@@ -409,42 +467,47 @@ def get_user():
 
 
 # ---------------------------------------------------------------------------
-# Curriculum routes (read-only — accessible without login for now)
-# Add @login_required here if you want to restrict viewing to logged-in users.
+# Curriculum routes
+#
+#   GET /api/curriculum        — no id: logged-in users get their own most
+#                                 recent dataset (falling back to demo if they
+#                                 have none yet); anonymous users get the demo
+#                                 user's most recent dataset. Always accessible
+#                                 since it only ever resolves to a dataset the
+#                                 requester already has rights to.
+#   GET /api/curriculum/<id>   — a specific dataset. Datasets owned by the
+#                                 reserved "demo" user are public; anything
+#                                 else requires CAS login, and the requester
+#                                 must either own it or appear in its
+#                                 dataset_shares list (403 otherwise).
 # ---------------------------------------------------------------------------
 
-@app.route('/api/curriculum', methods=['GET'])
-def get_curriculum():
-    conn = sqlite3.connect('curriculum.db')
-    cursor = conn.cursor()
+def _get_dataset_owner(cursor, dataset_id):
+    row = cursor.execute('SELECT owner_id FROM datasets WHERE id = ?', (dataset_id,)).fetchone()
+    return row[0] if row else None
 
-    # BUGFIX: this endpoint previously queried the courses/prerequisites
-    # tables with no dataset_id filter at all, so every course from every
-    # CSV ever uploaded was returned together — new uploads appeared to
-    # "stack" onto old ones in the graph instead of replacing them.
-    #
-    # Now: honor an explicit ?dataset_id= query param if given, otherwise
-    # default to the most recently uploaded dataset (matches how the
-    # frontend currently calls this endpoint — with no id — right after
-    # each upload).
-    dataset_id = request.args.get('dataset_id', type=int)
-    if dataset_id is None:
-        latest = cursor.execute(
-            'SELECT id FROM datasets ORDER BY id DESC LIMIT 1'
-        ).fetchone()
-        dataset_id = latest[0] if latest else None
+def _is_shared_with(cursor, dataset_id, user_id):
+    row = cursor.execute(
+        'SELECT 1 FROM dataset_shares WHERE dataset_id = ? AND user_id = ?',
+        (dataset_id, user_id)
+    ).fetchone()
+    return row is not None
 
-    if dataset_id is None:
-        conn.close()
-        return jsonify({
-            'curriculum_total': 0,
-            'total_blocking': 0,
-            'total_delay': 0,
-            'total_failure': 0,
-            'total_frequency': 0,
-            'courses': []
-        })
+def _check_dataset_access(cursor, dataset_id, session_user_id, demo_id):
+    """Returns None if the requester may view this dataset, otherwise an
+    (response, status) tuple the caller should return immediately."""
+    owner_id = _get_dataset_owner(cursor, dataset_id)
+    if owner_id is None:
+        return jsonify({'error': 'Dataset not found'}), 404
+    if owner_id == demo_id:
+        return None
+    if session_user_id is None:
+        return jsonify({'error': 'Authentication required. Please log in via /api/login.'}), 401
+    if session_user_id != owner_id and not _is_shared_with(cursor, dataset_id, session_user_id):
+        return jsonify({'error': 'You do not have access to this dataset'}), 403
+    return None
 
+def _serialize_curriculum(cursor, dataset_id):
     # Use c.id (the database's own unique autoincrement id) instead of
     # c.course_id (the raw CSV id, which can be null or duplicated for
     # "pathway" placeholder courses like capstone/electives).
@@ -466,8 +529,6 @@ def get_curriculum():
         JOIN courses c ON p.course_id = c.id
         WHERE c.dataset_id = ?
     ''', (dataset_id,)).fetchall()
-
-    conn.close()
 
     # Build prereq lookup: db id -> list of {id, type}
     prereq_map = {}
@@ -493,64 +554,199 @@ def get_curriculum():
             'prerequisites': prereq_map.get(db_id, [])
         })
 
-    curriculum_total = sum(c['total'] or 0 for c in courses)
-    total_blocking = sum(c['blocking'] or 0 for c in courses)
-    total_delay = sum(c['delay'] or 0 for c in courses)
-    total_failure = sum(c['failure'] or 0 for c in courses)
-    total_frequency = sum(c['frequency'] or 0 for c in courses)
-
-    return jsonify({
+    return {
         'dataset_id': dataset_id,
-        'curriculum_total': curriculum_total,
-        'total_blocking': total_blocking,
-        'total_delay': total_delay,
-        'total_failure': total_failure,
-        'total_frequency': total_frequency,
+        'curriculum_total': sum(c['total'] or 0 for c in courses),
+        'total_blocking': sum(c['blocking'] or 0 for c in courses),
+        'total_delay': sum(c['delay'] or 0 for c in courses),
+        'total_failure': sum(c['failure'] or 0 for c in courses),
+        'total_frequency': sum(c['frequency'] or 0 for c in courses),
         'courses': courses
-    })
+    }
 
-@app.route('/api/curriculumtest', methods=['GET'])
-def get_curriculum_test():
-    conn = sqlite3.connect('curriculum.db')
+@app.route('/api/curriculum', methods=['GET'])
+def get_curriculum():
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    courses_rows = cursor.execute('''
-        SELECT c.id, c.course_id, c.name, c.prefix, c.number, c.term,
-               c.failure_rate, c.frequency, s.blocking, s.delay
-        FROM courses c
-        LEFT JOIN scores s ON c.id = s.course_id
-    ''').fetchall()
+    demo_id = get_or_create_user(cursor, DEMO_USERNAME)
+    session_user_id = session.get('user_id')
+
+    dataset_id = None
+    if session_user_id is not None:
+        latest = cursor.execute(
+            'SELECT id FROM datasets WHERE owner_id = ? ORDER BY id DESC LIMIT 1', (session_user_id,)
+        ).fetchone()
+        dataset_id = latest[0] if latest else None
+
+    if dataset_id is None:
+        latest = cursor.execute(
+            'SELECT id FROM datasets WHERE owner_id = ? ORDER BY id DESC LIMIT 1', (demo_id,)
+        ).fetchone()
+        dataset_id = latest[0] if latest else None
+
+    if dataset_id is None:
+        conn.close()
+        return jsonify({
+            'curriculum_total': 0,
+            'total_blocking': 0,
+            'total_delay': 0,
+            'total_failure': 0,
+            'total_frequency': 0,
+            'courses': []
+        })
+
+    result = _serialize_curriculum(cursor, dataset_id)
+    conn.close()
+    return jsonify(result)
+
+@app.route('/api/curriculum/<int:dataset_id>', methods=['GET'])
+def get_curriculum_by_id(dataset_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    demo_id = get_or_create_user(cursor, DEMO_USERNAME)
+    session_user_id = session.get('user_id')
+
+    error = _check_dataset_access(cursor, dataset_id, session_user_id, demo_id)
+    if error:
+        conn.close()
+        return error
+
+    result = _serialize_curriculum(cursor, dataset_id)
+    conn.close()
+    return jsonify(result)
+
+@app.route('/api/datasets', methods=['GET'])
+@login_required
+def list_datasets():
+    """Lists datasets the logged-in user owns, plus datasets shared with them."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    owned = cursor.execute('''
+        SELECT id, label
+        FROM datasets
+        WHERE owner_id = ?
+        ORDER BY id DESC
+    ''', (session['user_id'],)).fetchall()
+
+    shared = cursor.execute('''
+        SELECT d.id, d.label, u.username
+        FROM datasets d
+        JOIN dataset_shares ds ON ds.dataset_id = d.id
+        JOIN users u ON u.id = d.owner_id
+        WHERE ds.user_id = ?
+        ORDER BY d.id DESC
+    ''', (session['user_id'],)).fetchall()
 
     conn.close()
 
-    courses = []
-    for row in courses_rows:
-        db_id, csv_course_id, name, prefix, number, term, failure_rate, frequency, blocking, delay = row
-        total = (blocking or 0) + (delay or 0)
-        courses.append({
-            'id': db_id,
-            'course_id': csv_course_id,
-            'name': name,
-            'prefix': prefix,
-            'number': number,
-            'term': term,
-            'failure_rate': failure_rate,
-            'frequency': frequency,
-            'blocking': blocking,
-            'delay': delay,
-            'total': total,
-        })
+    datasets = [
+        {'id': r[0], 'label': r[1], 'access': 'owner'}
+        for r in owned
+    ] + [
+        {'id': r[0], 'label': r[1], 'access': 'shared', 'owner_username': r[2]}
+        for r in shared
+    ]
 
-    curriculum_total = sum(c['total'] for c in courses)
-    total_blocking = sum(c['blocking'] or 0 for c in courses)
-    total_delay = sum(c['delay'] or 0 for c in courses)
+    return jsonify({'datasets': datasets})
 
-    return jsonify({
-        'curriculum_total': curriculum_total,
-        'total_blocking': total_blocking,
-        'total_delay': total_delay,
-        'courses': courses
-    })
+def _require_owned_dataset(cursor, dataset_id, session_user_id):
+    """Returns None if the dataset exists and is owned by session_user_id,
+    otherwise returns the (response, status) tuple the caller should return."""
+    owner_id = _get_dataset_owner(cursor, dataset_id)
+    if owner_id is None:
+        return jsonify({'error': 'Dataset not found'}), 404
+    if owner_id != session_user_id:
+        return jsonify({'error': 'You do not have access to this dataset'}), 403
+    return None
+
+def _shared_usernames(cursor, dataset_id):
+    rows = cursor.execute('''
+        SELECT u.username
+        FROM dataset_shares ds
+        JOIN users u ON u.id = ds.user_id
+        WHERE ds.dataset_id = ?
+        ORDER BY u.username
+    ''', (dataset_id,)).fetchall()
+    return [r[0] for r in rows]
+
+@app.route('/api/datasets/<int:dataset_id>/shares', methods=['GET'])
+@login_required
+def get_dataset_shares(dataset_id):
+    """Lists the VT PIDs a dataset is currently shared with. Owner-only."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    error = _require_owned_dataset(cursor, dataset_id, session['user_id'])
+    if error:
+        conn.close()
+        return error
+
+    usernames = _shared_usernames(cursor, dataset_id)
+    conn.close()
+    return jsonify({'dataset_id': dataset_id, 'shared_with': usernames})
+
+@app.route('/api/datasets/<int:dataset_id>/share', methods=['POST'])
+@login_required
+def share_dataset(dataset_id):
+    """Grants a specific VT PID access to a dataset. Owner-only.
+
+    If the PID has never logged into the app before, a placeholder users
+    row is created for them (same helper CAS login uses) so the grant is
+    ready and waiting for their first login.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    error = _require_owned_dataset(cursor, dataset_id, session['user_id'])
+    if error:
+        conn.close()
+        return error
+
+    username = (request.get_json(silent=True) or {}).get('username', '').strip()
+    if not username:
+        conn.close()
+        return jsonify({'error': 'username is required'}), 400
+
+    target_user_id = get_or_create_user(cursor, username)
+    cursor.execute(
+        'INSERT OR IGNORE INTO dataset_shares (dataset_id, user_id) VALUES (?, ?)',
+        (dataset_id, target_user_id)
+    )
+    conn.commit()
+
+    usernames = _shared_usernames(cursor, dataset_id)
+    conn.close()
+    return jsonify({'dataset_id': dataset_id, 'shared_with': usernames})
+
+@app.route('/api/datasets/<int:dataset_id>/share/<username>', methods=['DELETE'])
+@login_required
+def unshare_dataset(dataset_id, username):
+    """Revokes a specific VT PID's access to a dataset. Owner-only."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    error = _require_owned_dataset(cursor, dataset_id, session['user_id'])
+    if error:
+        conn.close()
+        return error
+
+    row = cursor.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify({'error': 'No such user'}), 404
+
+    cursor.execute(
+        'DELETE FROM dataset_shares WHERE dataset_id = ? AND user_id = ?',
+        (dataset_id, row[0])
+    )
+    conn.commit()
+
+    usernames = _shared_usernames(cursor, dataset_id)
+    conn.close()
+    return jsonify({'dataset_id': dataset_id, 'shared_with': usernames})
 
 @app.route('/api/upload', methods=['POST'])
 @login_required
@@ -568,9 +764,12 @@ def upload_csv():
 
     try:
         init_db()
-        conn = sqlite3.connect('curriculum.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute('INSERT INTO datasets (label) VALUES (?)', (label,))
+        cursor.execute(
+            'INSERT INTO datasets (label, owner_id) VALUES (?, ?)',
+            (label, session['user_id'])
+        )
         dataset_id = cursor.lastrowid
 
         conn.commit()
