@@ -32,7 +32,27 @@ export default function CurriculumMapLive() {
   }
 
   useEffect(() => {
-    loadCurriculum();
+    async function checkAuthAndLoad() {
+      try {
+        const res = await fetch("/api/user", { credentials: "include" });
+
+        if (res.status === 401) {
+          window.location.href = "/api/login";
+          return;
+        }
+
+        if (!res.ok) {
+          setError(`Unable to verify session (status ${res.status})`);
+          return;
+        }
+
+        loadCurriculum();
+      } catch (err) {
+        setError(err.message);
+      }
+    }
+
+    checkAuthAndLoad();
   }, []);
 
   // AI-ASSISTED
