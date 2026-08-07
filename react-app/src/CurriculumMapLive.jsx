@@ -153,6 +153,31 @@ export default function CurriculumMapLive() {
         overflow: "hidden",
       }}
     >
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          flexShrink: 0,
+        }}
+      >
+        <a
+          href="/api/logout"
+          style={{
+            padding: "6px 12px",
+            background: "#21262d",
+            color: "#c9d1d9",
+            border: "1px solid #30363d",
+            borderRadius: 6,
+            fontSize: 13,
+            textDecoration: "none",
+          }}
+        >
+          Log out
+        </a>
+      </div>
+
+
       <div style={{ flex: 1, minHeight: 0 }}>
         <CourseGraph
           courses={graphData.courses}
