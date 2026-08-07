@@ -116,12 +116,18 @@ def init_db():
     # Create tables if they don't already exist.
     # 'scores' columns (blocking, delay, etc.) are curriculum analytics metrics per course.
     # AI-ASSISTED
-    # Date: 07-02-2027
+    # Date: 07-02-2026
     # Developer: Jonathan Michel
     # Model: Claude Sonnet 4.6
     # Prompt: "Write the SQLite to create the separate tables for the curriculum information, the prerequisite table, and the scoring table."
     # Modifications: Placed the given SQLite into the relevant python code and removed unnecessary columns
     # Reason: Need to move info from CSV to database
+    # Updated: 07-29-2026
+    # Changes since original: Added users, datasets, and dataset_shares tables
+    #   to support per-user dataset ownership and sharing; added owner_id
+    #   backfill migration (via PRAGMA table_info) for databases created before
+    #   ownership existed; added demo-user assignment so pre-ownership datasets
+    #   stay publicly viewable.
     cursor.executescript('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
