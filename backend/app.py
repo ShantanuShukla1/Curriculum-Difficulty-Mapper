@@ -754,6 +754,50 @@ def unshare_dataset(dataset_id, username):
     conn.close()
     return jsonify({'dataset_id': dataset_id, 'shared_with': usernames})
 
+# AI-ASSISTED
+# Date: 08-07-2026
+# Developer: Shantanu Shukla
+# Model: Claude Sonnet 4.6
+# Prompt: "Write a DELETE /api/datasets/<id> route, owner-only like the
+# existing share routes, that removes a dataset and everything tied to it
+# (courses, prerequisites, scores, shares) since there's no ON DELETE
+# CASCADE in the schema."
+# Modifications: None, used as generated.
+# Reason: Requested ability to delete a previously uploaded dataset from
+# the dropdown menu.
+@app.route('/api/datasets/<int:dataset_id>', methods=['DELETE'])
+@login_required
+def delete_dataset(dataset_id):
+    """Permanently deletes a dataset and all of its courses, prerequisites,
+    scores, and share grants. Owner-only."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    error = _require_owned_dataset(cursor, dataset_id, session['user_id'])
+    if error:
+        conn.close()
+        return error
+
+    course_ids = [r[0] for r in cursor.execute(
+        'SELECT id FROM courses WHERE dataset_id = ?', (dataset_id,)
+    ).fetchall()]
+
+    if course_ids:
+        placeholders = ','.join('?' * len(course_ids))
+        cursor.execute(
+            f'DELETE FROM prerequisites WHERE course_id IN ({placeholders}) OR prereq_id IN ({placeholders})',
+            course_ids + course_ids
+        )
+        cursor.execute(f'DELETE FROM scores WHERE course_id IN ({placeholders})', course_ids)
+
+    cursor.execute('DELETE FROM courses WHERE dataset_id = ?', (dataset_id,))
+    cursor.execute('DELETE FROM dataset_shares WHERE dataset_id = ?', (dataset_id,))
+    cursor.execute('DELETE FROM datasets WHERE id = ?', (dataset_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'status': 'deleted', 'dataset_id': dataset_id})
+
 @app.route('/api/upload', methods=['POST'])
 @login_required
 def upload_csv():

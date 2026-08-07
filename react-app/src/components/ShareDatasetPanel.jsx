@@ -12,6 +12,11 @@ import { useEffect, useState } from "react";
 // into CurriculumMapLive alongside Nathan's dataset picker.
 // Reason: Backend sharing endpoints (Jonathan) were already built; needed
 // the matching frontend UI for tonight's deadline.
+// Updated: 08-07-2026
+// Changes since original: Added a window.confirm() guard before handleRemove
+// actually calls the DELETE endpoint.
+// Reason: Requested a confirmation step before revoking someone's access,
+// since it's a destructive action with no undo.
 //
 // Lets the owner of a dataset see who currently has access, grant access to
 // a new VT PID, and revoke access from an existing one. Only rendered for
@@ -88,6 +93,10 @@ export default function ShareDatasetPanel({ datasetId, isOwner }) {
   }
 
   async function handleRemove(target) {
+    if (!window.confirm(`Remove ${target}'s access to this dataset?`)) {
+      return;
+    }
+
     setStatus("loading");
     setMessage("");
 
