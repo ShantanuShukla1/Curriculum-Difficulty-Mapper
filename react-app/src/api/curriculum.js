@@ -20,6 +20,21 @@ export async function fetchCurriculum(datasetId) {
   return transformCurriculumResponse(data);
 }
 
+export async function fetchCurriculumById(datasetId) {
+  const res = await fetch(`/api/curriculum/${encodeURIComponent(datasetId)}`);
+ 
+  if (!res.ok) {
+    throw new Error(
+      `Failed to fetch curriculum: ${res.status} ${res.statusText}`
+    );
+  }
+ 
+  const data = await res.json();
+ 
+  return transformCurriculumResponse(data);
+}
+
+
 export function transformCurriculumResponse(data) {
   const courses = (data.courses || []).map((c) => ({
     id: c.id,

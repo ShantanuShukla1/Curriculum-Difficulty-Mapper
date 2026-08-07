@@ -4,6 +4,7 @@ import CourseDetailPanel, {
   CurriculumTotalsPanel,
 } from "./components/CourseDetailPanel";
 import CsvUploadForm from "./components/CsvUploadForm";
+import DatasetSelector from "./components/DatasetSelector";
 import { fetchCurriculum } from "./api/curriculum";
 
 export default function CurriculumMapLive() {
@@ -167,6 +168,8 @@ export default function CurriculumMapLive() {
         <CurriculumTotalsPanel totals={totals} />
 
         <CsvUploadForm onUploadSuccess={loadCurriculum} />
+
+        <DatasetSelector onCurriculumLoaded={(curriculum) => setGraphData(curriculum)} />
       </div>
     </div>
   );

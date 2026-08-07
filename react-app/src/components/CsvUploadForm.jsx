@@ -23,8 +23,8 @@ export default function CsvUploadForm({ onUploadSuccess }) {
   // Developer: Shantanu Shukla
   // Model: Claude Sonnet 4.6
   // Prompt: "Write a CSV upload handler using fetch and FormData that tracks idle/uploading/success/error status, shows an error message on non-2xx responses, and clears the selected file after a successful upload."
-  // Modifications: Added the `res.ok` check with a manually thrown Error including status/statusText, since fetch doesn't reject on HTTP error codes by default.
-  // Reason: Without this the form showed "Upload complete" even when the backend returned a 400/500.
+  // Modifications: Added the `res.ok` check with a manually thrown Error including status/statusText, since fetch doesn't reject on HTTP error codes by default. Later added credentials: 'include' since /api/upload is behind login_required and needs the session cookie sent explicitly, and changed onUploadSuccess to pass data.dataset_id instead of the full response body so callers can load that specific dataset.
+  // Reason: Without the res.ok check the form showed "Upload complete" even when the backend returned a 400/500. Without credentials: 'include', cross-context requests could silently 401 despite the user being logged in via the CAS session cookie.
   async function handleUpload() {
     if (!file) {
       setStatus("error");
@@ -41,6 +41,7 @@ export default function CsvUploadForm({ onUploadSuccess }) {
     try {
       const res = await fetch("/api/upload", {
         method: "POST",
+        credentials: "include",
         body: formData,
       });
 
@@ -56,7 +57,7 @@ export default function CsvUploadForm({ onUploadSuccess }) {
       setMessage("Upload complete.");
       setFile(null);
 
-      onUploadSuccess?.(data);
+      onUploadSuccess?.(data.dataset_id);
     } catch (err) {
       setStatus("error");
       setMessage(err.message);
