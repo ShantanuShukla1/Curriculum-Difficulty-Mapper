@@ -11,19 +11,6 @@
 // them to select one to display using a GET /api/curriculum/<id>"
 //
 // Allows users to select which of the available datasets to view.
-//
-// AI-ASSISTED
-// Date: 08-07-2026
-// Developer: Shantanu Shukla
-// Model: Claude Sonnet 4.6
-// Prompt: "Add a delete button next to the dataset dropdown that's only
-// enabled when the selected dataset is owned by the current user, confirms
-// with the user before deleting, calls DELETE /api/datasets/<id>, and
-// removes the dataset from the local list + clears the selection on
-// success."
-// Modifications: None, used as generated.
-// Reason: Requested ability to delete previously uploaded datasets from the
-// dropdown, with a confirmation step since it's destructive/irreversible.
 
 import { useEffect, useState } from "react";
 import { fetchCurriculumById } from "../api/curriculum";
@@ -33,8 +20,6 @@ export default function DatasetSelector({ onCurriculumLoaded, onDatasetSelected,
   const [selectedId, setSelectedId] = useState(controlledId || "");
   const [listStatus, setListStatus] = useState("loading"); // 'loading' | 'ready' | 'error'
   const [loadStatus, setLoadStatus] = useState("idle"); // 'idle' | 'loading' | 'error'
-  const [deleteStatus, setDeleteStatus] = useState("idle"); // 'idle' | 'loading' | 'error' | 'done'
-  const [deleteMessage, setDeleteMessage] = useState("");
  
   // Load the list of datasets the user can access.
   useEffect(() => {
@@ -90,42 +75,6 @@ export default function DatasetSelector({ onCurriculumLoaded, onDatasetSelected,
       setLoadStatus("error");
     }
   }
-
-  async function handleDelete() {
-    const dataset = datasets.find((d) => String(d.id) === String(selectedId));
-    if (!dataset) return;
-
-    if (!window.confirm(`Delete "${dataset.label}"? This cannot be undone.`)) {
-      return;
-    }
-
-    setDeleteStatus("loading");
-    setDeleteMessage("");
-
-    try {
-      const res = await fetch(`/api/datasets/${dataset.id}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Failed to delete: ${res.status} ${res.statusText}`);
-      }
-
-      setDatasets((prev) => prev.filter((d) => d.id !== dataset.id));
-      setSelectedId("");
-      onDatasetSelected?.(null);
-      setDeleteStatus("done");
-      setDeleteMessage(`"${dataset.label}" was deleted.`);
-    } catch (err) {
-      setDeleteStatus("error");
-      setDeleteMessage(err.message);
-    }
-  }
-
-  const selectedDataset = datasets.find((d) => String(d.id) === String(selectedId));
-  const canDelete = selectedDataset?.access === "owner";
  
   return (
     <div style={wrapperStyle}>
@@ -149,16 +98,6 @@ export default function DatasetSelector({ onCurriculumLoaded, onDatasetSelected,
           </option>
         ))}
       </select>
-
-      {canDelete && (
-        <button
-          onClick={handleDelete}
-          disabled={deleteStatus === "loading"}
-          style={deleteButtonStyle}
-        >
-          {deleteStatus === "loading" ? "Deleting…" : "Delete dataset"}
-        </button>
-      )}
  
       {listStatus === "error" && (
         <p style={errorStyle}>Couldn't load your datasets. Try refreshing the page.</p>
@@ -166,11 +105,6 @@ export default function DatasetSelector({ onCurriculumLoaded, onDatasetSelected,
       {loadStatus === "loading" && <p style={hintStyle}>Loading curriculum…</p>}
       {loadStatus === "error" && (
         <p style={errorStyle}>Couldn't load that curriculum. Try selecting it again.</p>
-      )}
-      {deleteMessage && (
-        <p style={deleteStatus === "error" ? errorStyle : { ...hintStyle, color: "#3fb950" }}>
-          {deleteMessage}
-        </p>
       )}
     </div>
   );
@@ -212,17 +146,4 @@ const errorStyle = {
   color: "#f85149",
   fontSize: 10,
   marginTop: 6,
-};
-
-const deleteButtonStyle = {
-  display: "block",
-  width: "100%",
-  marginTop: 8,
-  padding: "6px 8px",
-  background: "transparent",
-  color: "#f85149",
-  border: "1px solid #f85149",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontSize: 12,
 };
