@@ -5,12 +5,18 @@ import CourseDetailPanel, {
 } from "./components/CourseDetailPanel";
 import CsvUploadForm from "./components/CsvUploadForm";
 import DatasetSelector from "./components/DatasetSelector";
+import ShareDatasetPanel from "./components/ShareDatasetPanel";
 import { fetchCurriculum } from "./api/curriculum";
 
 export default function CurriculumMapLive() {
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [graphData, setGraphData] = useState(null);
   const [error, setError] = useState(null);
+  // Tracks the currently selected dataset object ({id, label, access, ...})
+  // from DatasetSelector, so we know whether to show the owner-only
+  // ShareDatasetPanel. Null means "still on the default/most-recent
+  // dataset" (nothing picked from the dropdown yet).
+  const [selectedDataset, setSelectedDataset] = useState(null);
 
   // AI-ASSISTED
   // Date: 07-22-2026
@@ -169,7 +175,17 @@ export default function CurriculumMapLive() {
 
         <CsvUploadForm onUploadSuccess={loadCurriculum} />
 
-        <DatasetSelector onCurriculumLoaded={(curriculum) => setGraphData(curriculum)} />
+        <DatasetSelector
+          onCurriculumLoaded={(curriculum) => setGraphData(curriculum)}
+          onDatasetSelected={setSelectedDataset}
+        />
+
+        {selectedDataset && (
+          <ShareDatasetPanel
+            datasetId={selectedDataset.id}
+            isOwner={selectedDataset.access === "owner"}
+          />
+        )}
       </div>
     </div>
   );

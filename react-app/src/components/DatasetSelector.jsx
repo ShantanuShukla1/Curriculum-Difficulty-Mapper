@@ -15,7 +15,7 @@
 import { useEffect, useState } from "react";
 import { fetchCurriculumById } from "../api/curriculum";
  
-export default function DatasetSelector({ onCurriculumLoaded, selectedId: controlledId }) {
+export default function DatasetSelector({ onCurriculumLoaded, onDatasetSelected, selectedId: controlledId }) {
   const [datasets, setDatasets] = useState([]);
   const [selectedId, setSelectedId] = useState(controlledId || "");
   const [listStatus, setListStatus] = useState("loading"); // 'loading' | 'ready' | 'error'
@@ -57,7 +57,14 @@ export default function DatasetSelector({ onCurriculumLoaded, selectedId: contro
   async function handleSelect(id) {
     setSelectedId(id);
     if (!id) return;
- 
+
+    // Let the parent know which dataset object (id + owner/shared access)
+    // was picked, so it can decide whether to show owner-only UI like
+    // ShareDatasetPanel. Uses String() since <select> values are strings
+    // but dataset ids come back as numbers from the API.
+    const dataset = datasets.find((d) => String(d.id) === String(id));
+    onDatasetSelected?.(dataset || null);
+
     setLoadStatus("loading");
     try {
       const curriculum = await fetchCurriculumById(id);
