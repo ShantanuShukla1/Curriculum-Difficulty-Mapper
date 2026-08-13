@@ -8,7 +8,7 @@ Curriculum Difficulty Mapper turns flat prerequisite lists into an interactive d
 
 ## Screenshot
 
-![Curriculum graph visualization](docs/screenshot.png)
+<img width="2513" height="1352" alt="CurrDiffMapper" src="https://github.com/user-attachments/assets/f1805e45-7e40-47cf-a202-0767c8242b4c" />
 
 ## Tech Stack
 
