@@ -52,3 +52,5 @@ This is a full-stack application with separate backend and frontend services. Se
 ## License
 
 This project was developed for academic purposes as part of the Virginia Tech Computer Science capstone program.
+
+*This is a reuploaded version from the private GitLab where this was originally being worked on
